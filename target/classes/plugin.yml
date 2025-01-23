@@ -1,0 +1,23 @@
+name: supercow
+version: '1.0-SNAPSHOT'
+main: net.dabbit.supercow.SuperCow
+api-version: '1.19'
+authors: [dayi]
+
+commands:
+  supercow:
+    description: SuperCow plugin commands
+    usage: |-
+      §6=== SuperCow 命令帮助 ===
+      §f/supercow summon §7- 召唤你的超级小母牛
+      §f/supercow recall §7- 收回你的超级小母牛
+      §f/supercow status §7- 查看你的超级小母牛状态
+      §f/supercow follow §7- 切换跟随模式
+      §f/supercow version §7- 查看插件版本
+    aliases: [scow]
+    permission: supercow.use
+
+permissions:
+  supercow.use:
+    description: 允许使用 SuperCow 插件的基础命令
+    default: true
