@@ -36,7 +36,7 @@ class CombatManager(
 
     companion object {
         private const val ATTACK_COOLDOWN = 50L
-        private const val SHOOT_RANGE = 16.0
+        private const val SHOOT_RANGE = 20.0
         private const val RAGE_MODE_THRESHOLD = 0.3 // 30%血量以下进入狂暴
     }
 
@@ -529,6 +529,14 @@ class CombatManager(
         val currentTime = System.currentTimeMillis()
         val lastAttackTime = attackCooldowns[cow.uniqueId.toString()] ?: 0L
         val owner = plugin.server.getPlayer(ownerName) ?: return
+        val petLevel = plugin.getPetLevel(ownerName) // 需要实现这个获取等级的方法
+
+        // 计算实际速度
+        val baseSpeed = ArrowConfig.getBaseSpeed(petLevel)
+        val rageSpeed = ArrowConfig.getRageSpeed(petLevel)
+
+        // 在箭矢生成部分修改速度计算
+
 
         if (!targetValidator.isValidTarget(target, owner)) return
 
@@ -581,6 +589,8 @@ class CombatManager(
                     arrow.damage = if (isRageMode) ArrowConfig.RAGE_DAMAGE else ArrowConfig.BASE_DAMAGE
                     arrow.isCritical = true
 
+
+
                     val direction = target.location.clone().add(0.0, 0.5, 0.0)
                         .subtract(arrowLocation).toVector().normalize()
 
@@ -595,7 +605,10 @@ class CombatManager(
                         )
                     }
 
-                    val speed = if (isRageMode) ArrowConfig.RAGE_ARROW_SPEED else ArrowConfig.ARROW_SPEED
+//                    val speed = if (isRageMode) ArrowConfig.RAGE_ARROW_SPEED else ArrowConfig.ARROW_SPEED
+//                    arrow.velocity = direction.multiply(speed)
+
+                    val speed = if (isRageMode) rageSpeed else baseSpeed
                     arrow.velocity = direction.multiply(speed)
 
                     arrow.world.spawnParticle(

@@ -9,6 +9,22 @@ class ArrowConfig {
         const val BASE_DAMAGE = 1.0
         const val RAGE_DAMAGE = 4.0
         const val HEAL_AMOUNT = 2.5
+
+        const val BASE_ARROW_SPEED = 1.2
+        const val SPEED_PER_LEVEL = 0.15  // 每级增加的速度
+        const val MAX_LEVEL = 20          // 最大等级
+        const val RAGE_MULTIPLIER = 2.0   // 狂暴模式倍率
+
+        fun getBaseSpeed(level: Int): Double {
+            val clampedLevel = level.coerceIn(1..MAX_LEVEL)
+            return BASE_ARROW_SPEED + (clampedLevel - 1) * SPEED_PER_LEVEL
+        }
+
+        // 狂暴模式速度
+        fun getRageSpeed(level: Int): Double {
+            return getBaseSpeed(level) * RAGE_MULTIPLIER
+        }
+
         const val ARROW_SPEED = 3.0
         const val RAGE_ARROW_SPEED = 6.0
         const val ARROW_SPREAD = 0.0
@@ -18,7 +34,7 @@ class ArrowConfig {
         const val FIREWORK_POWER = 1
         const val RAGE_FIREWORK_POWER = 2
 //
-        const val BASE_ARROW_SPEED = 1.2
+//        const val BASE_ARROW_SPEED = 1.2
 //        const val RAGE_ARROW_SPEED = 2.0
 //        const val BASE_DAMAGE = 3.0
 //        const val RAGE_DAMAGE = 6.0

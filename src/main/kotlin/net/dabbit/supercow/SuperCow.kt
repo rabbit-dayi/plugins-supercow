@@ -771,18 +771,19 @@ class SuperCow : JavaPlugin(), Listener {
     fun getPetStatus(player: Player): String {
         val data = petData[player.name] ?: return "${PREFIX}§c你还没有超级小母牛！"
         val cow = activePets[player.name]
-        val expNeeded = calculateExpNeeded(data.level)
+
+        val maxHealth = 180 + (data.level - 1) * 20
+        val currentHealth = cow?.health?.toInt() ?: 0
+        val attackDamage = 5.0 + data.level
 
         return """
-        §6=== 超级小母牛状态 ===
-        §f等级: §a${data.level}
-        §f经验值: §a${data.exp}/${expNeeded}
-        §f击杀数: §a${data.kills}
-        §f状态: §a${if (cow != null) "已召唤" else "未召唤"}
-        §f生命值: §a${cow?.health?.toInt() ?: 0}/${cow?.getAttribute(Attribute.GENERIC_MAX_HEALTH)?.value?.toInt() ?: 0}
-        §f最大生命值: §a${180 + (data.level - 1) * 20}❤
-        §f攻击力: §a${5.0 + data.level}
-        §6==================
+        §6§l=== 超级小母牛状态 ===
+        §f⚜ 等级: §e${data.level}
+        §f📊 经验: §a${data.exp}/${calculateExpNeeded(data.level)}
+        §f🗡 击杀数: §c${data.kills}
+        §f🎪 状态: ${if (cow != null) "§a已召唤" else "§c未召唤"}
+        §f❤ 生命值: §4$currentHealth§f/§4$maxHealth
+        §6§l====================
     """.trimIndent()
     }
 
@@ -1097,6 +1098,11 @@ class SuperCow : JavaPlugin(), Listener {
             }
         }.runTaskTimer(this, 20L, 20L) // 每秒检查一次
     }
+
+    fun getPetLevel(ownerName: String): Int {
+        return petData[ownerName]?.level ?: 1 // 如果玩家数据不存在则返回默认1级
+    }
+
 
 
 }
