@@ -106,16 +106,35 @@ class PathfindingManager(private val plugin: SuperCow) {
     }
 
     private fun hasLineOfSight(from: Location, to: Location): Boolean {
-        val rayTrace = from.world?.rayTraceBlocks(
-            from.clone().add(0.0, 1.0, 0.0),  // 使用clone()防止修改原始位置
-            to.clone().subtract(from).toVector().normalize(),
-            from.distance(to),
-            FluidCollisionMode.NEVER,
-            true
-        )
+        try {
+            // Calculate direction vector
+            val direction = to.clone().subtract(from).toVector()
 
-        // 如果rayTrace为null或者没有击中方块，则表示视线通畅
-        return rayTrace?.hitBlock == null
+            // Safety check for zero-length vector
+            if (direction.lengthSquared() < 0.0001) {
+                return true
+            }
+
+            // Normalize direction vector with safety checks
+            val normalizedDirection = try {
+                direction.normalize()
+            } catch (e: IllegalArgumentException) {
+                return false
+            }
+
+            // Perform ray trace with validated vectors
+            val rayTrace = from.world?.rayTraceBlocks(
+                from.clone().add(0.0, 1.0, 0.0),
+                normalizedDirection,
+                from.distance(to),
+                FluidCollisionMode.NEVER,
+                true
+            )
+
+            return rayTrace?.hitBlock == null
+        } catch (e: Exception) {
+            return false
+        }
     }
 
     private fun checkStuckStatus(cow: Cow, currentLoc: Location) {
@@ -203,43 +222,115 @@ class PathfindingManager(private val plugin: SuperCow) {
         return adjustedVector
     }
 
+//    private fun calculateMoveVector(
+//        currentLoc: Location,
+//        targetLoc: Location,
+//        distance: Double,
+//        strafeAngle: Double
+//    ): Vector {
+//        val direction = targetLoc.subtract(currentLoc).toVector().normalize()
+//
+//        // 动态调整速度
+//        val speed = when {
+//            distance > OPTIMAL_COMBAT_DISTANCE * 1.5 -> MAX_SPEED
+//            distance < OPTIMAL_COMBAT_DISTANCE * 0.5 -> -MIN_SPEED
+//            else -> (distance - OPTIMAL_COMBAT_DISTANCE) * 0.1.coerceIn(-MIN_SPEED, MAX_SPEED)
+//        }
+//
+//        // 计算躲避向量
+//        val strafeRad = Math.toRadians(strafeAngle)
+//        val strafeVector = Vector(
+//            cos(strafeRad) * STRAFE_SPEED,
+//            0.0,
+//            sin(strafeRad) * STRAFE_SPEED
+//        )
+//
+//        // 合并移动向量
+//        val moveVector = direction.multiply(speed).add(strafeVector)
+//
+//        // 随机跳跃逻辑
+//        val cowId = UUID.randomUUID() // 这里应该使用实际的牛的UUID
+//        val currentTime = System.currentTimeMillis()
+//        val lastJump = lastJumpTime[cowId] ?: 0L
+//
+//        if (currentTime - lastJump > JUMP_COOLDOWN && Random.nextDouble() < 0.05) { // 5%的概率跳跃
+//            moveVector.y = RANDOM_JUMP_POWER
+//            lastJumpTime[cowId] = currentTime
+//        }
+//
+//        return moveVector
+//    }
+
     private fun calculateMoveVector(
         currentLoc: Location,
         targetLoc: Location,
         distance: Double,
         strafeAngle: Double
     ): Vector {
-        val direction = targetLoc.subtract(currentLoc).toVector().normalize()
+        // 安全获取方向向量
+        val rawDirection = targetLoc.clone().subtract(currentLoc).toVector()
+        val direction = when {
+            rawDirection.lengthSquared() < 0.0001 -> Vector.getRandom().subtract(Vector(0.5, 0.5, 0.5)).normalize()
+            else -> try {
+                rawDirection.normalize()
+            } catch (e: IllegalArgumentException) {
+                Vector.getRandom().normalize()
+            }
+        }
 
-        // 动态调整速度
+        // 安全计算速度
         val speed = when {
             distance > OPTIMAL_COMBAT_DISTANCE * 1.5 -> MAX_SPEED
             distance < OPTIMAL_COMBAT_DISTANCE * 0.5 -> -MIN_SPEED
-            else -> (distance - OPTIMAL_COMBAT_DISTANCE) * 0.1.coerceIn(-MIN_SPEED, MAX_SPEED)
-        }
+            else -> (distance - OPTIMAL_COMBAT_DISTANCE).coerceIn(-MIN_SPEED, MAX_SPEED) * 0.1
+        }.finiteValue()
 
-        // 计算躲避向量
+        // 生成安全横向向量
         val strafeRad = Math.toRadians(strafeAngle)
-        val strafeVector = Vector(
-            cos(strafeRad) * STRAFE_SPEED,
-            0.0,
-            sin(strafeRad) * STRAFE_SPEED
-        )
-
-        // 合并移动向量
-        val moveVector = direction.multiply(speed).add(strafeVector)
-
-        // 随机跳跃逻辑
-        val cowId = UUID.randomUUID() // 这里应该使用实际的牛的UUID
-        val currentTime = System.currentTimeMillis()
-        val lastJump = lastJumpTime[cowId] ?: 0L
-
-        if (currentTime - lastJump > JUMP_COOLDOWN && Random.nextDouble() < 0.05) { // 5%的概率跳跃
-            moveVector.y = RANDOM_JUMP_POWER
-            lastJumpTime[cowId] = currentTime
+        val strafeVector = try {
+            Vector(
+                cos(strafeRad).finiteValue() * STRAFE_SPEED,
+                0.0,
+                sin(strafeRad).finiteValue() * STRAFE_SPEED
+            )
+        } catch (e: Exception) {
+            Vector()
         }
+
+        // 合并向量并验证
+        val moveVector = try {
+            direction.multiply(speed).add(strafeVector).apply {
+                x = x.finiteValue()
+                y = y.finiteValue()
+                z = z.finiteValue()
+            }
+        } catch (e: Exception) {
+            Vector().also {
+                plugin.logger.warning("生成无效移动向量: ${e.message}")
+            }
+        }
+
+        // 随机跳跃逻辑（添加安全校验）
+        //        // 随机跳跃逻辑
+////        val cowId = UUID.randomUUID() // 这里应该使用实际的牛的UUID
+//        val currentTime = System.currentTimeMillis()
+//        val lastJump = lastJumpTime[cowId] ?: 0L
+//
+//        if (currentTime - lastJump > JUMP_COOLDOWN && Random.nextDouble() < 0.05) { // 5%的概率跳跃
+//            moveVector.y = RANDOM_JUMP_POWER
+//            lastJumpTime[cowId] = currentTime
+//        }
 
         return moveVector
+    }
+
+    // 数值安全扩展函数
+    private fun Double.finiteValue(): Double {
+        return when {
+            this.isNaN() -> 0.0
+            this.isInfinite() -> if (this > 0) Double.MAX_VALUE else Double.MIN_VALUE
+            else -> this.coerceIn(-MAX_SPEED, MAX_SPEED)
+        }
     }
 
     private fun cleanup(cowId: UUID) {
