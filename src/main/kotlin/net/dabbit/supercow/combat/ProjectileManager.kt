@@ -96,28 +96,78 @@ class ProjectileManager(private val plugin: SuperCow) {
     }
 
     fun shootFireball(shootLocation: Location, target: Entity, isRageMode: Boolean) {
-        val fireball = shootLocation.world?.spawn(
-            shootLocation.clone().add(0.0, ArrowConfig.SHOOT_HEIGHT, 0.0),
-            SmallFireball::class.java
-        ) ?: return
+        try {
+            // Safely spawn fireball
+            val spawnLoc = shootLocation.clone().add(0.0, ArrowConfig.SHOOT_HEIGHT, 0.0)
+            val fireball = shootLocation.world?.spawn(
+                spawnLoc,
+                SmallFireball::class.java
+            ) ?: return
 
-        // 设置火球属性
-        fireball.yield = if (isRageMode) Config.RAGE_FIREBALL_EXPLOSION_POWER else Config.FIREBALL_EXPLOSION_POWER
-        fireball.setIsIncendiary(false)  // 设置为false防止点燃
+            // Set fireball properties
+            fireball.yield = if (isRageMode) {
+                Config.RAGE_FIREBALL_EXPLOSION_POWER
+            } else {
+                Config.FIREBALL_EXPLOSION_POWER
+            }.coerceIn(0f, 10f) // Ensure reasonable yield values
 
-        // 设置初始速度和方向
-        val initialDirection = calculateInitialDirection(shootLocation, target.location)
-        fireball.direction = initialDirection
-        fireball.velocity = initialDirection.multiply(if (isRageMode) Config.RAGE_VELOCITY else Config.BASE_VELOCITY)
+            fireball.setIsIncendiary(false)
 
-        // 添加自定义标签
-        fireball.setMetadata("supercow_fireball", plugin.fixedMetadataValue())
+            // Calculate and validate direction
+            val initialDirection = try {
+                calculateInitialDirection(shootLocation, target.location).apply {
+                    // Ensure all components are finite and reasonable
+                    x = x.coerceIn(-1.0, 1.0)
+                    y = y.coerceIn(-1.0, 1.0)
+                    z = z.coerceIn(-1.0, 1.0)
+                }
+            } catch (e: Exception) {
+                // Fallback direction if calculation fails
+                Vector(1.0, 0.0, 0.0)
+            }
 
-        // 播放发射效果
-        playFireballLaunchEffects(shootLocation, isRageMode)
+            // Set direction and velocity with validation
+            fireball.direction = initialDirection
 
-        // 追踪控制
-        startFireballTracking(fireball, target, isRageMode)
+            val velocity = initialDirection.clone().multiply(
+                if (isRageMode) Config.RAGE_VELOCITY else Config.BASE_VELOCITY
+            ).apply {
+                // Ensure velocity components are finite and within limits
+                x = x.coerceIn(-10.0, 10.0)
+                y = y.coerceIn(-10.0, 10.0)
+                z = z.coerceIn(-10.0, 10.0)
+            }
+
+            fireball.velocity = velocity
+
+            // Add metadata
+            fireball.setMetadata("supercow_fireball", plugin.fixedMetadataValue())
+
+            // Play effects
+            playFireballLaunchEffects(shootLocation, isRageMode)
+
+            // Start tracking
+            startFireballTracking(fireball, target, isRageMode)
+
+        } catch (e: Exception) {
+            plugin.logger.warning("Error shooting fireball: ${e.message}")
+        }
+    }
+
+    // Helper function to calculate initial direction
+    private fun calculateInitialDirection(from: Location, to: Location): Vector {
+        return try {
+            val direction = to.clone().subtract(from).toVector()
+
+            // Check if vectors are too close
+            if (direction.lengthSquared() < 0.0001) {
+                Vector(1.0, 0.0, 0.0)
+            } else {
+                direction.normalize()
+            }
+        } catch (e: Exception) {
+            Vector(1.0, 0.0, 0.0)
+        }
     }
     @EventHandler
     fun onFireballHit(event: EntityExplodeEvent) {
@@ -140,17 +190,17 @@ class ProjectileManager(private val plugin: SuperCow) {
         event.isCancelled = true  // 取消原始爆炸
     }
 
-    private fun calculateInitialDirection(from: Location, to: Location): Vector {
-        val direction = to.clone().subtract(from).toVector().normalize()
-
-        // 添加一些随机偏移
-        val spread = 0.1
-        direction.x += Random.nextDouble(-spread, spread)
-        direction.y += Random.nextDouble(-spread, spread)
-        direction.z += Random.nextDouble(-spread, spread)
-
-        return direction.normalize()
-    }
+//    private fun calculateInitialDirection(from: Location, to: Location): Vector {
+//        val direction = to.clone().subtract(from).toVector().normalize()
+//
+//        // 添加一些随机偏移
+//        val spread = 0.1
+//        direction.x += Random.nextDouble(-spread, spread)
+//        direction.y += Random.nextDouble(-spread, spread)
+//        direction.z += Random.nextDouble(-spread, spread)
+//
+//        return direction.normalize()
+//    }
 
     private fun playPotionLaunchEffects(location: Location, isRageMode: Boolean) {
         location.world?.apply {
