@@ -21,7 +21,11 @@ class CombatManager(
     private val trajectoryCalculator: ArrowTrajectoryCalculator,
     private val fireworkManager: FireworkManager,
     private val projectileManager: ProjectileManager,
-    private val summonManager: SummonManager
+    private val summonManager: SummonManager,
+    private val explodingCowManager: ExplodingCowManager,
+    private val chickenBombardmentManager: ChickenBombardmentManager,
+    private val musicAttackManager: MusicAttackManager
+
 ) : Listener {
     private val currentTargets = mutableMapOf<String, MutableSet<Entity>>()
     private val attackCooldowns = mutableMapOf<String, Long>()
@@ -238,7 +242,7 @@ class CombatManager(
     private fun isFriendlyTarget(target: Entity, playerName: String): Boolean {
         // 检查是否是超级牛宠物
         if (plugin.getActivePets().containsValue(target)) {
-            return true
+            return false
         }
 
         // 检查是否是召唤物
@@ -360,148 +364,6 @@ class CombatManager(
     }
 
 
-    private fun shootFirework(cow: Cow, target: Entity, isRageMode: Boolean) {
-        // 生成烟花
-        val firework = cow.world.spawn(
-            cow.location.clone().add(0.0, ArrowConfig.SHOOT_HEIGHT, 0.0),
-            Firework::class.java
-        )
-
-        // 设置烟花元数据
-        val meta = firework.fireworkMeta
-        val effect = FireworkEffect.builder().apply {
-            // 随机生成多个颜色
-            val colors = generateRandomColors(if (isRageMode) 5 else 3)
-            val fadeColors = generateRandomColors(if (isRageMode) 3 else 2)
-
-            withColor(*colors.toTypedArray())
-            withFade(*fadeColors.toTypedArray())
-
-            // 随机选择烟花类型
-            with(if (isRageMode) {
-                listOf(
-                    FireworkEffect.Type.BALL_LARGE,
-                    FireworkEffect.Type.BURST,
-                    FireworkEffect.Type.STAR
-                ).random()
-            } else {
-                listOf(
-                    FireworkEffect.Type.BALL,
-                    FireworkEffect.Type.STAR
-                ).random()
-            })
-
-            trail(true)
-            flicker(isRageMode)
-        }.build()
-
-        meta.addEffect(effect)
-        meta.power = if (isRageMode) ArrowConfig.RAGE_FIREWORK_POWER else ArrowConfig.FIREWORK_POWER
-        firework.fireworkMeta = meta
-
-        // 设置初始速度和方向
-        val initialDirection = target.location.clone()
-            .subtract(firework.location)
-            .toVector()
-            .normalize()
-            .multiply(if (isRageMode) FireworkConfig.RAGE_VELOCITY else FireworkConfig.BASE_VELOCITY)
-
-        firework.velocity = initialDirection
-
-        // 添加自定义标签
-        firework.setMetadata("supercow_firework", plugin.fixedMetadataValue())
-
-        // 播放发射效果
-        cow.world.apply {
-            playSound(
-                cow.location,
-                Sound.ENTITY_FIREWORK_ROCKET_LAUNCH,
-                1.0f,
-                if (isRageMode) 0.5f else 1.0f
-            )
-            spawnParticle(
-                if (isRageMode) Particle.FLAME else Particle.FIREWORKS_SPARK,
-                cow.location.add(0.0, 1.0, 0.0),
-                10,
-                0.2, 0.2, 0.2,
-                0.05
-            )
-        }
-
-        // 烟花追踪和爆炸控制
-        object : BukkitRunnable() {
-            private var ticks = 0
-
-            override fun run() {
-                ticks++
-
-                // 检查烟花是否还有效
-                if (!firework.isValid || ticks >= FireworkConfig.MAX_LIFETIME_TICKS) {
-                    if (firework.isValid) {
-                        firework.detonate()
-                    }
-                    cancel()
-                    return
-                }
-
-                // 检查目标是否还有效
-                if (!target.isValid || target.isDead) {
-                    firework.detonate()
-                    cancel()
-                    return
-                }
-
-                // 检查是否击中目标
-                val distance = firework.location.distance(target.location)
-                if (distance <= FireworkConfig.DETONATION_DISTANCE) {
-                    // 播放击中效果
-                    target.world.apply {
-                        playSound(
-                            target.location,
-                            Sound.ENTITY_FIREWORK_ROCKET_BLAST,
-                            1.0f,
-                            if (isRageMode) 0.5f else 1.0f
-                        )
-                        spawnParticle(
-                            if (isRageMode) Particle.EXPLOSION_LARGE else Particle.EXPLOSION_NORMAL,
-                            target.location,
-                            5,
-                            0.2, 0.2, 0.2,
-                            0.05
-                        )
-                    }
-
-                    firework.detonate()
-                    cancel()
-                    return
-                }
-
-                // 动态调整追踪
-                val newDirection = target.location.clone()
-                    .subtract(firework.location)
-                    .toVector()
-                    .normalize()
-                    .multiply(if (isRageMode) FireworkConfig.RAGE_VELOCITY else FireworkConfig.BASE_VELOCITY)
-
-                // 平滑转向
-                val currentVel = firework.velocity
-                val smoothedVel = currentVel.add(
-                    newDirection.subtract(currentVel).multiply(FireworkConfig.TRACKING_SPEED)
-                )
-
-                firework.velocity = smoothedVel
-
-                // 追踪粒子效果
-                firework.world.spawnParticle(
-                    if (isRageMode) Particle.DRAGON_BREATH else Particle.FIREWORKS_SPARK,
-                    firework.location,
-                    3,
-                    0.1, 0.1, 0.1,
-                    0.01
-                )
-            }
-        }.runTaskTimer(plugin, 1L, 1L)
-    }
 
 
     // 配置对象
@@ -559,6 +421,107 @@ class CombatManager(
         // 停止寻路
         pathfindingManager.stopPathfinding(cow)
     }
+
+//private fun shootArrow(cow: Cow, target: Entity, ownerName: String) {
+//    val currentTime = System.currentTimeMillis()
+//    val lastAttackTime = attackCooldowns[cow.uniqueId.toString()] ?: 0L
+//    val owner = plugin.server.getPlayer(ownerName) ?: return
+//
+//    if (!targetValidator.isValidTarget(target, owner)) return
+//
+//    val isRageMode = rageMode[ownerName] ?: false
+//    val actualCooldown = if (isRageMode) ATTACK_COOLDOWN / 2 else ATTACK_COOLDOWN
+//
+//    if (currentTime - lastAttackTime < actualCooldown) return
+//
+//    attackCooldowns[cow.uniqueId.toString()] = currentTime
+//
+//    // 修改攻击方式选择，添加爆炸牛选项
+//    val attackType = if (isRageMode) {
+//        when (Random.nextInt(1000)) { // 使用1000来获得更精确的概率控制
+//            in 0..849 -> "arrow"     // 85%
+//            in 850..879 -> "firework" // 3%
+//            in 880..909 -> "potion"   // 3%
+//            in 910..939 -> "fireball" // 3%
+//            in 940..959 -> "exploding_cow" // 2%
+//            in 960..973 -> "summon_cows"    // 1.4%
+//            in 974..987 -> "summon_parrots" // 1.4%
+//            else -> "summon_rabbits"        // 1.2%
+//        }
+//    } else {
+//        when (Random.nextInt(1000)) {
+//            in 0..849 -> "arrow"     // 85%
+//            in 850..879 -> "firework" // 3%
+//            in 880..909 -> "potion"   // 3%
+//            in 910..939 -> "fireball" // 3%
+//            in 940..959 -> "exploding_cow" // 2%
+//            else -> {                 // 4%
+//                when (Random.nextInt(10)) {
+//                    in 0..3 -> "summon_cows"    // 1.6%
+//                    in 4..7 -> "summon_parrots" // 1.6%
+//                    else -> "summon_rabbits"     // 0.8%
+//                }
+//            }
+//        }
+//    }
+//
+//    when (attackType) {
+//        "arrow" -> {
+//            val arrowLocation = cow.location.add(0.0, ArrowConfig.SHOOT_HEIGHT, 0.0)
+//            val arrowCount = if (isRageMode) 3 else 1  // 狂暴模式发射3支箭
+//
+//            repeat(arrowCount) {
+//                val arrow = cow.world.spawnEntity(arrowLocation, EntityType.ARROW) as Arrow
+//
+//                // 设置箭矢属性
+//                arrow.shooter = cow
+//                arrow.setMetadata("supercow_arrow", plugin.fixedMetadataValue())
+//                arrow.damage = if (isRageMode) ArrowConfig.RAGE_DAMAGE else ArrowConfig.BASE_DAMAGE
+//                arrow.isCritical = true
+//
+//                // 计算发射方向
+//                val direction = target.location.clone().add(0.0, 0.5, 0.0)
+//                    .subtract(arrowLocation).toVector().normalize()
+//
+//                // 添加随机偏移
+//                val spread = if (isRageMode) ArrowConfig.RAGE_SPREAD else ArrowConfig.ARROW_SPREAD
+//                if (spread > 0) {
+//                    direction.add(
+//                        Vector(
+//                            Random.nextDouble(-spread, spread),
+//                            Random.nextDouble(-spread, spread),
+//                            Random.nextDouble(-spread, spread)
+//                        )
+//                    )
+//                }
+//
+//                // 设置箭矢速度
+//                val speed = if (isRageMode) ArrowConfig.RAGE_ARROW_SPEED else ArrowConfig.ARROW_SPEED
+//                arrow.velocity = direction.multiply(speed)
+//
+//                // 粒子效果
+//                arrow.world.spawnParticle(
+//                    if (isRageMode) Particle.CRIT_MAGIC else Particle.CRIT,
+//                    arrow.location,
+//                    10,
+//                    0.1, 0.1, 0.1,
+//                    0.05
+//                )
+//            }
+//        }
+//        "firework" -> fireworkManager.shootFirework(cow.location, target, isRageMode)
+//        "potion" -> projectileManager.shootPotion(cow.location, target, isRageMode)
+//        "fireball" -> projectileManager.shootFireball(cow.location, target, isRageMode)
+//        "exploding_cow" -> explodingCowManager.launchExplodingCow(cow.location, target, isRageMode)
+//        "summon_cows" -> summonManager.tryStartSummon(owner, cow, target, SummonManager.SummonType.COWS)
+//        "summon_parrots" -> summonManager.tryStartSummon(owner, cow, target, SummonManager.SummonType.PARROTS)
+//        "summon_rabbits" -> summonManager.tryStartSummon(owner, cow, target, SummonManager.SummonType.RABBITS)
+//    }
+//
+//    effectManager.playShootEffects(cow.location, isRageMode)
+//    cow.health = (cow.health + ArrowConfig.HEAL_AMOUNT).coerceAtMost(cow.maxHealth)
+//}
+
     private fun shootArrow(cow: Cow, target: Entity, ownerName: String) {
         val currentTime = System.currentTimeMillis()
         val lastAttackTime = attackCooldowns[cow.uniqueId.toString()] ?: 0L
@@ -573,68 +536,65 @@ class CombatManager(
 
         attackCooldowns[cow.uniqueId.toString()] = currentTime
 
-        // 修改攻击方式选择，添加召唤选项
+        // 修改后的攻击类型选择，提高特殊攻击概率
         val attackType = if (isRageMode) {
-            when (Random.nextInt(1000)) { // 使用1000来获得更精确的概率控制
-                in 0..899 -> "arrow"     // 90%
-                in 900..929 -> "firework" // 3%
-                in 930..959 -> "potion"   // 3%
-                in 960..989 -> "fireball" // 3%
-                in 990..993 -> "summon_cows"    // 0.4%
-                in 994..997 -> "summon_parrots" // 0.4%
-                else -> "summon_rabbits"        // 0.2%
+            when (Random.nextInt(1000)) {
+                in 0..599 -> "arrow"      // 60%
+                in 600..679 -> "firework"  // 8%
+                in 680..759 -> "potion"    // 8%
+                in 760..819 -> "fireball"  // 6%
+                in 820..869 -> "exploding_cow" // 5%
+                in 870..909 -> "chicken_bomb"  // 4%
+                in 910..949 -> "music_attack"  // 4%
+                in 950..969 -> "summon_cows"   // 2%
+                in 970..989 -> "summon_parrots" // 2%
+                else -> "summon_rabbits"       // 1%
             }
         } else {
             when (Random.nextInt(1000)) {
-                in 0..899 -> "arrow"     // 90%
-                in 900..929 -> "firework" // 3%
-                in 930..959 -> "potion"   // 3%
-                in 960..989 -> "fireball" // 3%
-                else -> {                 // 1%
-                    when (Random.nextInt(10)) {
-                        in 0..3 -> "summon_cows"    // 0.4%
-                        in 4..7 -> "summon_parrots" // 0.4%
-                        else -> "summon_rabbits"     // 0.2%
-                    }
-                }
+                in 0..649 -> "arrow"      // 65%
+                in 650..719 -> "firework"  // 7%
+                in 720..789 -> "potion"    // 7%
+                in 790..839 -> "fireball"  // 5%
+                in 840..879 -> "exploding_cow" // 4%
+                in 880..909 -> "chicken_bomb"  // 3%
+                in 910..939 -> "music_attack"  // 3%
+                in 940..959 -> "summon_cows"   // 2%
+                in 960..979 -> "summon_parrots" // 2%
+                else -> "summon_rabbits"       // 2%
             }
         }
 
         when (attackType) {
             "arrow" -> {
                 val arrowLocation = cow.location.add(0.0, ArrowConfig.SHOOT_HEIGHT, 0.0)
-                val arrowCount = if (isRageMode) 3 else 1  // 狂暴模式发射3支箭
+                val arrowCount = if (isRageMode) 3 else 1
 
                 repeat(arrowCount) {
                     val arrow = cow.world.spawnEntity(arrowLocation, EntityType.ARROW) as Arrow
 
-                    // 设置箭矢属性
                     arrow.shooter = cow
                     arrow.setMetadata("supercow_arrow", plugin.fixedMetadataValue())
                     arrow.damage = if (isRageMode) ArrowConfig.RAGE_DAMAGE else ArrowConfig.BASE_DAMAGE
                     arrow.isCritical = true
 
-                    // 计算发射方向
                     val direction = target.location.clone().add(0.0, 0.5, 0.0)
                         .subtract(arrowLocation).toVector().normalize()
 
-                    // 添加随机偏移
                     val spread = if (isRageMode) ArrowConfig.RAGE_SPREAD else ArrowConfig.ARROW_SPREAD
                     if (spread > 0) {
                         direction.add(
                             Vector(
-                            Random.nextDouble(-spread, spread),
-                            Random.nextDouble(-spread, spread),
-                            Random.nextDouble(-spread, spread)
-                        )
+                                Random.nextDouble(-spread, spread),
+                                Random.nextDouble(-spread, spread),
+                                Random.nextDouble(-spread, spread)
+                            )
                         )
                     }
 
-                    // 设置箭矢速度
                     val speed = if (isRageMode) ArrowConfig.RAGE_ARROW_SPEED else ArrowConfig.ARROW_SPEED
                     arrow.velocity = direction.multiply(speed)
 
-                    // 粒子效果
                     arrow.world.spawnParticle(
                         if (isRageMode) Particle.CRIT_MAGIC else Particle.CRIT,
                         arrow.location,
@@ -643,12 +603,13 @@ class CombatManager(
                         0.05
                     )
                 }
-
-
             }
             "firework" -> fireworkManager.shootFirework(cow.location, target, isRageMode)
             "potion" -> projectileManager.shootPotion(cow.location, target, isRageMode)
             "fireball" -> projectileManager.shootFireball(cow.location, target, isRageMode)
+            "exploding_cow" -> explodingCowManager.launchExplodingCow(cow.location, target, isRageMode)
+            "chicken_bomb" -> chickenBombardmentManager.startChickenBombardment(cow.location, target, isRageMode)
+            "music_attack" -> musicAttackManager.startMusicAttack(cow.location, target, isRageMode)
             "summon_cows" -> summonManager.tryStartSummon(owner, cow, target, SummonManager.SummonType.COWS)
             "summon_parrots" -> summonManager.tryStartSummon(owner, cow, target, SummonManager.SummonType.PARROTS)
             "summon_rabbits" -> summonManager.tryStartSummon(owner, cow, target, SummonManager.SummonType.RABBITS)
@@ -657,6 +618,7 @@ class CombatManager(
         effectManager.playShootEffects(cow.location, isRageMode)
         cow.health = (cow.health + ArrowConfig.HEAL_AMOUNT).coerceAtMost(cow.maxHealth)
     }
+
 
     // 处理药水和火球的伤害事件
     @EventHandler

@@ -48,7 +48,12 @@ class SuperCow : JavaPlugin(), Listener {
     private lateinit var commandExecutor: SuperCowCommand  // 添加这行
     private lateinit var fireworkManager: FireworkManager // 烟花
     private lateinit var projectilmgr: ProjectileManager // 烟花
+    private lateinit var exploadingmgr: ExplodingCowManager // 烟花
+    private lateinit var chickenBombardmentManager: ChickenBombardmentManager // 烟花
+    private lateinit var musicAttackManager: MusicAttackManager // 烟花
     lateinit var summonmgr: SummonManager  private set// 烟花
+
+
 
 
 
@@ -144,6 +149,9 @@ class SuperCow : JavaPlugin(), Listener {
         fireworkManager =  FireworkManager(this)
         projectilmgr = ProjectileManager(this)
         summonmgr =  SummonManager(this,trajectoryCalculator)
+        exploadingmgr = ExplodingCowManager(this)
+        chickenBombardmentManager = ChickenBombardmentManager(this)
+        musicAttackManager = MusicAttackManager(this)
 
 
         // 4. 初始化战斗管理器 (确保在其他管理器之后)
@@ -156,6 +164,10 @@ class SuperCow : JavaPlugin(), Listener {
             fireworkManager,
             projectilmgr,
             summonmgr,
+            exploadingmgr,
+            chickenBombardmentManager,
+            musicAttackManager
+
         )
 
         // 5. 注册事件监听器

@@ -28,7 +28,7 @@ class SummonManager(
 
     object Config {
         const val SUMMON_COUNT = 10
-        const val SUMMON_DURATION = 4 * 20L // 30秒
+        const val SUMMON_DURATION = 20 * 20L // 30秒
         const val ATTACK_COOLDOWN = 1L
         const val SHOOT_RANGE = 16.0
         const val BASE_DAMAGE = 8.0
@@ -186,7 +186,7 @@ class SummonManager(
             val offset = getRandomOffset()
             val spawnLoc = location.clone().add(offset)
 
-            val rabbit = location.world?.spawn(spawnLoc, Chicken::class.java)?.apply {
+            val rabbit = location.world?.spawn(spawnLoc, Rabbit::class.java)?.apply {
                 customName = "§d${player.name}的超级兔子部队"
                 isCustomNameVisible = true
                 getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH)?.baseValue = Config.Rabbit.MAX_HEALTH
