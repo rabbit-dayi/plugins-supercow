@@ -83,7 +83,7 @@ class PathfindingManager(private val plugin: SuperCow) {
             }
         }
 
-        task.runTaskTimerAsynchronously(plugin, 0L, 2L) // 提高更新频率到2tick
+        task.runTaskTimerAsynchronously(plugin, 0L, 1L) // 提高更新频率到2tick
         pathfindingTasks[cowId] = task
     }
 

@@ -27,11 +27,11 @@ class SummonManager(
     }
 
     object Config {
-        const val SUMMON_COUNT = 15
-        const val SUMMON_DURATION = 90 * 20L // 30秒
-        const val ATTACK_COOLDOWN = 20L
+        const val SUMMON_COUNT = 10
+        const val SUMMON_DURATION = 20 * 20L // 30秒
+        const val ATTACK_COOLDOWN = 1L
         const val SHOOT_RANGE = 16.0
-        const val BASE_DAMAGE = 2.0
+        const val BASE_DAMAGE = 8.0
         const val RAGE_DAMAGE = 4.0
 
         // 各种召唤物的属性
@@ -48,12 +48,12 @@ class SummonManager(
 //        }
 
         object Rabbit {
-            const val MAX_HEALTH = 28.0
+            const val MAX_HEALTH = 3.0
             const val MOVEMENT_SPEED = 0.5
             const val JUMP_STRENGTH = 0.8
         }
         object Parrot {
-            const val MAX_HEALTH = 26.0
+            const val MAX_HEALTH = 3.0
             const val MOVEMENT_SPEED = 0.4
             const val FLIGHT_HEIGHT = 5.0
             const val AVOIDANCE_RANGE = 3.0
@@ -62,9 +62,9 @@ class SummonManager(
         }
 
         object Arrow {
-            const val CLEANUP_DELAY = 100L  // 5秒后清理箭矢
-            const val BASE_DAMAGE = 2.0
-            const val RAGE_DAMAGE = 4.0
+            const val CLEANUP_DELAY = 20L  // 5秒后清理箭矢
+            const val BASE_DAMAGE = 8.0
+            const val RAGE_DAMAGE = 18.0
         }
     }
 
@@ -192,7 +192,7 @@ class SummonManager(
                 getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH)?.baseValue = Config.Rabbit.MAX_HEALTH
                 health = Config.Rabbit.MAX_HEALTH
                 getAttribute(org.bukkit.attribute.Attribute.GENERIC_MOVEMENT_SPEED)?.baseValue = Config.Rabbit.MOVEMENT_SPEED
-                rabbitType = Rabbit.Type.THE_KILLER_BUNNY
+//                rabbitType = Rabbit.Type.THE_KILLER_BUNNY
                 setAI(true)
             } ?: return@repeat  // 使用 return@repeat 代替 continue
 

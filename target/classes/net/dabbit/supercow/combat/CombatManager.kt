@@ -575,23 +575,27 @@ class CombatManager(
 
         // 修改攻击方式选择，添加召唤选项
         val attackType = if (isRageMode) {
-            when (Random.nextInt(100)) {
-                in 0..89 -> "arrow"     // 90%
-                in 90..92 -> "firework" // 3%
-                in 93..95 -> "potion"   // 3%
-                in 96..97 -> "fireball" // 2%
-                in 98..98 -> "summon_cows"    // 1%
-                in 99..99 -> "summon_parrots" // 1%
-                else -> "summon_rabbits"      // 1%
+            when (Random.nextInt(1000)) { // 使用1000来获得更精确的概率控制
+                in 0..899 -> "arrow"     // 90%
+                in 900..929 -> "firework" // 3%
+                in 930..959 -> "potion"   // 3%
+                in 960..989 -> "fireball" // 3%
+                in 990..993 -> "summon_cows"    // 0.4%
+                in 994..997 -> "summon_parrots" // 0.4%
+                else -> "summon_rabbits"        // 0.2%
             }
         } else {
-            when (Random.nextInt(100)) {
-                in 0..85 -> "arrow"     // 90%
-                in 93..95 -> "firework" // 3%
-                in 86..92 -> "potion"   // 3%
-                in 96..97 -> "fireball" // 2%
-                else -> {               // 2%
-                    listOf("summon_cows", "summon_parrots", "summon_rabbits").random()
+            when (Random.nextInt(1000)) {
+                in 0..899 -> "arrow"     // 90%
+                in 900..929 -> "firework" // 3%
+                in 930..959 -> "potion"   // 3%
+                in 960..989 -> "fireball" // 3%
+                else -> {                 // 1%
+                    when (Random.nextInt(10)) {
+                        in 0..3 -> "summon_cows"    // 0.4%
+                        in 4..7 -> "summon_parrots" // 0.4%
+                        else -> "summon_rabbits"     // 0.2%
+                    }
                 }
             }
         }

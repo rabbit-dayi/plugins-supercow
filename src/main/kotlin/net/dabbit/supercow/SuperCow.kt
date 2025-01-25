@@ -36,6 +36,7 @@ import net.dabbit.supercow.combat.*
 import org.bukkit.entity.*
 import org.bukkit.event.entity.EntityDamageByEntityEvent
 import org.bukkit.event.entity.EntityDamageEvent
+import org.bukkit.event.player.PlayerJoinEvent
 
 class SuperCow : JavaPlugin(), Listener {
     private val petData = HashMap<String, SuperCowData>()
@@ -47,7 +48,12 @@ class SuperCow : JavaPlugin(), Listener {
     private lateinit var commandExecutor: SuperCowCommand  // 添加这行
     private lateinit var fireworkManager: FireworkManager // 烟花
     private lateinit var projectilmgr: ProjectileManager // 烟花
+    private lateinit var exploadingmgr: ExplodingCowManager // 烟花
+    private lateinit var chickenBombardmentManager: ChickenBombardmentManager // 烟花
+    private lateinit var musicAttackManager: MusicAttackManager // 烟花
     lateinit var summonmgr: SummonManager  private set// 烟花
+
+
 
 
 
@@ -63,12 +69,16 @@ class SuperCow : JavaPlugin(), Listener {
     private val followMode = HashMap<String, Boolean>() // 存储跟随模式状态
     private val lostPets = HashMap<String, Cow>() // 存储丢失的宠物
 
+    private val spawnFailCounts = HashMap<String, Int>()//生成失败计数器
+
+
     companion object {
         const val PREFIX = "§6[SuperCow] §r"
         const val MAX_FOLLOW_DISTANCE = 30.0 // 最大跟随距离
         const val TELEPORT_DISTANCE = 20.0 // 触发传送的距离
         const val RESPAWN_DELAY = 100L  // 5秒 = 100 ticks
         const val RESPAWN_MESSAGE_DELAY = 20L  // 1秒 = 20 ticks
+        const val MAX_SPAWN_FAILS = 3 // 最大生成失败次数
     }
 
     fun fixedMetadataValue(): FixedMetadataValue {
@@ -139,6 +149,9 @@ class SuperCow : JavaPlugin(), Listener {
         fireworkManager =  FireworkManager(this)
         projectilmgr = ProjectileManager(this)
         summonmgr =  SummonManager(this,trajectoryCalculator)
+        exploadingmgr = ExplodingCowManager(this)
+        chickenBombardmentManager = ChickenBombardmentManager(this)
+        musicAttackManager = MusicAttackManager(this)
 
 
         // 4. 初始化战斗管理器 (确保在其他管理器之后)
@@ -151,6 +164,10 @@ class SuperCow : JavaPlugin(), Listener {
             fireworkManager,
             projectilmgr,
             summonmgr,
+            exploadingmgr,
+            chickenBombardmentManager,
+            musicAttackManager
+
         )
 
         // 5. 注册事件监听器
@@ -208,6 +225,25 @@ class SuperCow : JavaPlugin(), Listener {
         }
         rainbowText.append(reset) // 重置颜色
         return rainbowText.toString()
+    }
+
+    @EventHandler
+    fun onPlayerJoin(event: PlayerJoinEvent) {
+        val player = event.player
+
+        // Check if player has a pet
+        if (petData.containsKey(player.name)) {
+            // Delay the summon by 2 seconds to ensure the player has fully loaded
+            object : BukkitRunnable() {
+                override fun run() {
+                    // Only summon if the player is still online and doesn't already have an active pet
+                    if (player.isOnline && !activePets.containsKey(player.name)) {
+                        summonPet(player)
+                        player.sendMessage("${PREFIX}§a你的超级小母牛已自动召唤！")
+                    }
+                }
+            }.runTaskLater(this, 80L) // 40 ticks = 2 seconds
+        }
     }
 
     @EventHandler
@@ -358,16 +394,13 @@ class SuperCow : JavaPlugin(), Listener {
 
     private fun playRespawnEffects(location: Location) {
         location.world?.let { world ->
-            // 播放粒子效果
             world.spawnParticle(
                 Particle.HEART,
                 location.add(0.0, 1.0, 0.0),
-                10,
+                5,
                 0.5, 0.5, 0.5,
                 0.1
             )
-
-            // 播放音效
             world.playSound(
                 location,
                 Sound.ENTITY_PLAYER_LEVELUP,
@@ -444,7 +477,10 @@ class SuperCow : JavaPlugin(), Listener {
             // 如果目标位置所在区块已加载，直接传送
             if (targetLocation.chunk.isLoaded) {
                 cow.teleport(targetLocation)
-                player.sendMessage("${PREFIX}§a你的超级小母牛已传送到你身边！")
+                server.scheduler.runTaskLater(this, Runnable {
+                    checkAndRespawnPet(player, cow)
+                }, 5L) // 等待5tick后检查位置
+//                player.sendMessage("${PREFIX}§a你的超级小母牛已传送到你身边！")
             } else {
                 // 如果区块未加载，创建新的宠物并记录旧的
                 lostPets[player.name] = cow
@@ -474,8 +510,80 @@ class SuperCow : JavaPlugin(), Listener {
                 //
             }
         } else {
-            player.sendMessage("${PREFIX}§c无法找到安全的传送位置！")
+            forceRespawnAtPlayer(player)
+//            player.sendMessage("${PREFIX}§c无法找到安全的传送位置！")
         }
+    }
+    private fun checkAndRespawnPet(player: Player, cow: Cow) {
+        // 检查小母牛是否在玩家附近
+        if (!cow.isValid || cow.isDead ||
+            cow.location.distance(player.location) > 5.0 ||
+            cow.world != player.world) {
+
+            // 移除旧的宠物
+            cow.remove()
+            activePets.remove(player.name)
+
+            // 尝试在安全位置重新生成
+            val safeLocation = findSafeLocation(player.location)
+            if (safeLocation != null) {
+                tryRespawnPet(player, safeLocation)
+            } else {
+                forceRespawnAtPlayer(player)
+            }
+        }
+    }
+    private fun tryRespawnPet(player: Player, location: Location) {
+        // 增加失败计数
+        spawnFailCounts[player.name] = (spawnFailCounts[player.name] ?: 0) + 1
+
+        if ((spawnFailCounts[player.name] ?: 0) >= MAX_SPAWN_FAILS) {
+            // 如果失败次数过多，直接在玩家位置生成
+            forceRespawnAtPlayer(player)
+            return
+        }
+
+        // 尝试生成新的宠物
+        try {
+            val newCow = player.world.spawnEntity(location, EntityType.COW) as Cow
+            val data = petData[player.name] ?: return
+
+            updateCowStats(newCow, player.name, data)
+            activePets[player.name] = newCow
+
+            // 检查是否生成成功
+            server.scheduler.runTaskLater(this, Runnable {
+                if (!newCow.isValid || newCow.isDead ||
+                    newCow.location.distance(player.location) > 5.0) {
+                    // 生成失败，重试
+                    newCow.remove()
+                    activePets.remove(player.name)
+                    tryRespawnPet(player, player.location)
+                } else {
+                    // 生成成功，重置失败计数
+                    spawnFailCounts[player.name] = 0
+                    player.sendMessage("${PREFIX}§a已为你重新生成超级小母牛！")
+                    playRespawnEffects(newCow.location)
+                }
+            }, 5L)
+        } catch (e: Exception) {
+            logger.warning("Failed to spawn pet: ${e.message}")
+            tryRespawnPet(player, player.location)
+        }
+    }
+    private fun forceRespawnAtPlayer(player: Player) {
+        // 直接在玩家位置生成
+        val newCow = player.world.spawnEntity(player.location, EntityType.COW) as Cow
+        val data = petData[player.name] ?: return
+
+        updateCowStats(newCow, player.name, data)
+        activePets[player.name] = newCow
+
+        // 重置失败计数
+        spawnFailCounts[player.name] = 0
+
+        player.sendMessage("${PREFIX}§a已在你的位置强制生成超级小母牛！")
+        playRespawnEffects(newCow.location)
     }
     private fun handleFollowBehavior(player: Player, cow: Cow) {
         val distance = cow.location.distance(player.location)
@@ -551,6 +659,7 @@ class SuperCow : JavaPlugin(), Listener {
         saveData()
 
         logger.info("SuperCow plugin has been disabled!")
+        spawnFailCounts.clear()
     }
 
     private fun loadData() {
