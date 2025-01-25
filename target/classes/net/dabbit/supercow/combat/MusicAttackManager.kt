@@ -66,66 +66,66 @@ class MusicAttackManager(private val plugin: SuperCow) {
     }
 
     fun startMusicAttack(center: Location, target: Entity, isRageMode: Boolean) {
-        val duration = if (isRageMode) Config.RAGE_DURATION else Config.BASE_DURATION
-        val rings = if (isRageMode) Config.RAGE_WAVE_RINGS else Config.BASE_WAVE_RINGS
-
-        // 播放开始音效
-        center.world?.playSound(
-            center,
-            Sound.BLOCK_NOTE_BLOCK_PLING,
-            2.0f,
-            1.0f
-        )
-
-        object : BukkitRunnable() {
-            private var ticks = 0
-            private var currentAngle = 0.0
-            private var melodyIndex = 0
-
-            override fun run() {
-                if (ticks >= duration) {
-                    cancel()
-                    return
-                }
-
-                // 为每个圆环生成音符
-                for (ring in 0 until rings) {
-                    val radius = (ring + 1) * 2.0
-                    createMusicRing(center, radius, currentAngle, isRageMode)
-                }
-
-                // 每tick旋转一定角度
-                currentAngle += 5.0
-                if (currentAngle >= 360.0) currentAngle = 0.0
-
-                // 检测并伤害范围内的实体
-                val attackRadius = if (isRageMode) Config.RAGE_ATTACK_RADIUS else Config.ATTACK_RADIUS
-                center.world?.getNearbyEntities(center, attackRadius, attackRadius, attackRadius)
-                    ?.filterIsInstance<LivingEntity>()
-                    ?.forEach { entity ->
-                        if (entity != target) {
-                            applyMusicEffects(entity, isRageMode)
-                        }
-                    }
-
-                melodyIndex = (melodyIndex + 1) % Config.NOTE_IDS.size
-                ticks++
-            }
-        }.runTaskTimer(plugin, 0L, 1L)
+//        val duration = if (isRageMode) Config.RAGE_DURATION else Config.BASE_DURATION
+//        val rings = if (isRageMode) Config.RAGE_WAVE_RINGS else Config.BASE_WAVE_RINGS
+//
+//        // 播放开始音效
+//        center.world?.playSound(
+//            center,
+//            Sound.BLOCK_NOTE_BLOCK_PLING,
+//            2.0f,
+//            1.0f
+//        )
+//
+//        object : BukkitRunnable() {
+//            private var ticks = 0
+//            private var currentAngle = 0.0
+//            private var melodyIndex = 0
+//
+//            override fun run() {
+//                if (ticks >= duration) {
+//                    cancel()
+//                    return
+//                }
+//
+//                // 为每个圆环生成音符
+//                for (ring in 0 until rings) {
+//                    val radius = (ring + 1) * 2.0
+//                    createMusicRing(center, radius, currentAngle, isRageMode)
+//                }
+//
+//                // 每tick旋转一定角度
+//                currentAngle += 5.0
+//                if (currentAngle >= 360.0) currentAngle = 0.0
+//
+//                // 检测并伤害范围内的实体
+//                val attackRadius = if (isRageMode) Config.RAGE_ATTACK_RADIUS else Config.ATTACK_RADIUS
+//                center.world?.getNearbyEntities(center, attackRadius, attackRadius, attackRadius)
+//                    ?.filterIsInstance<LivingEntity>()
+//                    ?.forEach { entity ->
+//                        if (entity != target) {
+//                            applyMusicEffects(entity, isRageMode)
+//                        }
+//                    }
+//
+//                melodyIndex = (melodyIndex + 1) % Config.NOTE_IDS.size
+//                ticks++
+//            }
+//        }.runTaskTimer(plugin, 0L, 1L)
     }
 
     private fun createMusicRing(center: Location, radius: Double, baseAngle: Double, isRageMode: Boolean) {
-        for (i in 0 until Config.NOTES_PER_RING) {
-            val angle = baseAngle + (i * 360.0 / Config.NOTES_PER_RING)
-            val radians = Math.toRadians(angle)
-
-            val x = center.x + radius * cos(radians)
-            val z = center.z + radius * sin(radians)
-
-            val noteLocation = Location(center.world, x, center.y + 0.5, z)
-
-            playMusicNote(noteLocation, isRageMode)
-        }
+//        for (i in 0 until Config.NOTES_PER_RING) {
+//            val angle = baseAngle + (i * 360.0 / Config.NOTES_PER_RING)
+//            val radians = Math.toRadians(angle)
+//
+//            val x = center.x + radius * cos(radians)
+//            val z = center.z + radius * sin(radians)
+//
+//            val noteLocation = Location(center.world, x, center.y + 0.5, z)
+//
+//            playMusicNote(noteLocation, isRageMode)
+//        }
     }
 
     private fun playMusicNote(location: Location, isRageMode: Boolean) {

@@ -2,6 +2,7 @@ package net.dabbit.supercow.pathfinding
 
 import net.dabbit.supercow.SuperCow
 import org.bukkit.Bukkit
+import org.bukkit.FluidCollisionMode
 import org.bukkit.Location
 import org.bukkit.entity.Cow
 import org.bukkit.entity.Entity
@@ -10,22 +11,27 @@ import org.bukkit.util.Vector
 import java.util.*
 import kotlin.math.cos
 import kotlin.math.sin
-
-
-
+import kotlin.random.Random
 class PathfindingManager(private val plugin: SuperCow) {
 
     private val pathfindingTasks = mutableMapOf<UUID, BukkitRunnable>()
     private val lastPositions = mutableMapOf<UUID, Location>()
     private val stuckTime = mutableMapOf<UUID, Int>()
+    private val lastAttackTime = mutableMapOf<UUID, Long>()
+    private val lastJumpTime = mutableMapOf<UUID, Long>() // 新增：记录上次跳跃时间
 
     companion object {
-        private const val OPTIMAL_COMBAT_DISTANCE = 8.0 // 最佳战斗距离
-        private const val MAX_SPEED = 0.6 // 最大速度
-        private const val MIN_SPEED = 0.3 // 最小速度
-        private const val STRAFE_SPEED = 0.3 // 横向移动速度
-        private const val STUCK_THRESHOLD = 0.1 // 卡住的阈值
-        private const val JUMP_POWER = 0.3 // 跳跃力度
+        private const val OPTIMAL_COMBAT_DISTANCE = 8.0
+        private const val MAX_SPEED = 0.6
+        private const val MIN_SPEED = 0.3
+        private const val STRAFE_SPEED = 0.4
+        private const val STUCK_THRESHOLD = 0.1
+        private const val JUMP_POWER = 0.4
+        private const val OBSTACLE_CHECK_DISTANCE = 2.0
+        private const val DODGE_SPEED = 0.5
+        private const val LINE_OF_SIGHT_CHECK_INTERVAL = 10 // ticks3
+        private const val JUMP_COOLDOWN = 1500L // 跳跃冷却时间（毫秒）
+        private const val RANDOM_JUMP_POWER = 0.5
     }
 
     fun startPathfinding(cow: Cow, target: Entity) {
@@ -36,9 +42,14 @@ class PathfindingManager(private val plugin: SuperCow) {
         stuckTime[cowId] = 0
 
         val task = object : BukkitRunnable() {
-            private var strafeAngle = 0.0
+            private var strafeAngle = Random.nextDouble() * 360.0
+            private var tickCount = 0
+            private var lastLineOfSight = false
+            private var alternatePathActive = false
 
             override fun run() {
+                tickCount++
+
                 if (!cow.isValid || !target.isValid) {
                     cancel()
                     cleanup(cowId)
@@ -49,42 +60,147 @@ class PathfindingManager(private val plugin: SuperCow) {
                 val targetLoc = target.location
                 val distance = currentLoc.distance(targetLoc)
 
-                // 检测是否卡住
-                val lastPos = lastPositions[cowId]
-                if (lastPos != null && lastPos.distance(currentLoc) < STUCK_THRESHOLD) {
-                    stuckTime[cowId] = (stuckTime[cowId] ?: 0) + 1
-                } else {
-                    stuckTime[cowId] = 0
+                // 检查视线
+                if (tickCount % LINE_OF_SIGHT_CHECK_INTERVAL == 0) {
+                    lastLineOfSight = hasLineOfSight(currentLoc, targetLoc)
+                    if (!lastLineOfSight) {
+                        alternatePathActive = true
+                    }
                 }
-                lastPositions[cowId] = currentLoc
+
+                // 检测卡住状态
+                checkStuckStatus(cow, currentLoc)
 
                 // 计算移动向量
-                val moveVector = calculateMoveVector(
-                    currentLoc,
-                    targetLoc,
-                    distance,
-                    strafeAngle
-                )
-
-                // 如果卡住了，尝试跳跃或改变方向
-                if ((stuckTime[cowId] ?: 0) > 5) {
-                    handleStuckSituation(cow, moveVector)
-                    strafeAngle += 45.0 // 改变横移角度
+                val moveVector = if (alternatePathActive) {
+                    calculateAlternativePath(cow, target, distance)
+                } else {
+                    calculateMoveVector(currentLoc, targetLoc, distance, strafeAngle)
                 }
+
+                // 处理障碍物
+                val finalVector = handleObstacles(cow, moveVector)
 
                 // 更新移动
                 Bukkit.getScheduler().runTask(plugin, Runnable {
-                    cow.velocity = moveVector
+                    cow.velocity = finalVector
                 })
 
                 // 更新横移角度
-                strafeAngle += 10.0
-                if (strafeAngle >= 360.0) strafeAngle = 0.0
+                updateStrafeAngle()
+            }
+
+            private fun updateStrafeAngle() {
+                // 动态调整横移速度和方向
+                val angleChange = if (Random.nextDouble() < 0.1) {
+                    Random.nextDouble(-45.0, 45.0)
+                } else {
+                    10.0
+                }
+                strafeAngle = (strafeAngle + angleChange) % 360.0
             }
         }
 
-        task.runTaskTimerAsynchronously(plugin, 0L, 1L) // 提高更新频率到2tick
+        task.runTaskTimerAsynchronously(plugin, 0L, 1L)
         pathfindingTasks[cowId] = task
+    }
+
+    private fun hasLineOfSight(from: Location, to: Location): Boolean {
+        val rayTrace = from.world?.rayTraceBlocks(
+            from.clone().add(0.0, 1.0, 0.0),  // 使用clone()防止修改原始位置
+            to.clone().subtract(from).toVector().normalize(),
+            from.distance(to),
+            FluidCollisionMode.NEVER,
+            true
+        )
+
+        // 如果rayTrace为null或者没有击中方块，则表示视线通畅
+        return rayTrace?.hitBlock == null
+    }
+
+    private fun checkStuckStatus(cow: Cow, currentLoc: Location) {
+        val lastPos = lastPositions[cow.uniqueId]
+        if (lastPos != null && lastPos.distance(currentLoc) < STUCK_THRESHOLD) {
+            stuckTime[cow.uniqueId] = (stuckTime[cow.uniqueId] ?: 0) + 1
+        } else {
+            stuckTime[cow.uniqueId] = 0
+        }
+        lastPositions[cow.uniqueId] = currentLoc
+    }
+
+    private fun calculateAlternativePath(cow: Cow, target: Entity, distance: Double): Vector {
+        val currentLoc = cow.location
+        val targetLoc = target.location
+
+        // 寻找可通行的路径点
+        val possiblePoints = mutableListOf<Location>()
+        for (angle in 0..360 step 45) {
+            val rad = Math.toRadians(angle.toDouble())
+            val checkPoint = currentLoc.clone().add(
+                cos(rad) * OPTIMAL_COMBAT_DISTANCE,
+                0.0,
+                sin(rad) * OPTIMAL_COMBAT_DISTANCE
+            )
+
+            if (hasLineOfSight(checkPoint, targetLoc) && isLocationSafe(checkPoint)) {
+                possiblePoints.add(checkPoint)
+            }
+        }
+
+        // 选择最佳路径点
+        return if (possiblePoints.isNotEmpty()) {
+            possiblePoints.minByOrNull {
+                it.distance(targetLoc)
+            }?.subtract(currentLoc)?.toVector()?.normalize()?.multiply(MAX_SPEED)
+                ?: calculateMoveVector(currentLoc, targetLoc, distance, 0.0)
+        } else {
+            calculateMoveVector(currentLoc, targetLoc, distance, 0.0)
+        }
+    }
+
+    private fun isLocationSafe(location: Location): Boolean {
+        // 检查位置是否安全（没有岩浆、虚空等）
+        val block = location.block
+        val above = block.getRelative(0, 1, 0)
+        val below = block.getRelative(0, -1, 0)
+
+        return !block.type.isSolid &&
+                !above.type.isSolid &&
+                below.type.isSolid &&
+                !below.isLiquid
+    }
+
+    private fun handleObstacles(cow: Cow, moveVector: Vector): Vector {
+        val loc = cow.location
+        val adjustedVector = moveVector.clone()
+
+        // 检查前方障碍物
+        val frontBlock = loc.clone().add(moveVector.clone().normalize().multiply(OBSTACLE_CHECK_DISTANCE)).block
+        if (frontBlock.type.isSolid) {
+            // 寻找替代路径
+            val leftClear = !loc.clone().add(moveVector.clone().rotateAroundY(Math.PI/2)).block.type.isSolid
+            val rightClear = !loc.clone().add(moveVector.clone().rotateAroundY(-Math.PI/2)).block.type.isSolid
+
+            when {
+                leftClear -> adjustedVector.rotateAroundY(Math.PI/4)
+                rightClear -> adjustedVector.rotateAroundY(-Math.PI/4)
+                else -> {
+                    // 如果两边都被堵住，尝试跳跃或后退
+                    if (!loc.clone().add(0.0, 2.0, 0.0).block.type.isSolid) {
+                        adjustedVector.setY(JUMP_POWER)
+                    } else {
+                        adjustedVector.multiply(-1)
+                    }
+                }
+            }
+        }
+
+        // 检查头顶障碍物
+        if (loc.clone().add(0.0, 2.0, 0.0).block.type.isSolid) {
+            adjustedVector.setY(-0.1)
+        }
+
+        return adjustedVector
     }
 
     private fun calculateMoveVector(
@@ -93,65 +209,49 @@ class PathfindingManager(private val plugin: SuperCow) {
         distance: Double,
         strafeAngle: Double
     ): Vector {
-        // 基础方向向量
         val direction = targetLoc.subtract(currentLoc).toVector().normalize()
 
-        // 根据距离动态调整速度
+        // 动态调整速度
         val speed = when {
-            distance > OPTIMAL_COMBAT_DISTANCE * 1.5 -> MAX_SPEED // 距离过远，全速追击
-            distance < OPTIMAL_COMBAT_DISTANCE * 0.5 -> -MIN_SPEED // 距离过近，后退
-            else -> calculateOptimalSpeed(distance) // 在最佳范围内动态调整速度
+            distance > OPTIMAL_COMBAT_DISTANCE * 1.5 -> MAX_SPEED
+            distance < OPTIMAL_COMBAT_DISTANCE * 0.5 -> -MIN_SPEED
+            else -> (distance - OPTIMAL_COMBAT_DISTANCE) * 0.1.coerceIn(-MIN_SPEED, MAX_SPEED)
         }
 
-        // 计算横向移动
+        // 计算躲避向量
         val strafeRad = Math.toRadians(strafeAngle)
-        val strafeX = cos(strafeRad) * STRAFE_SPEED
-        val strafeZ = sin(strafeRad) * STRAFE_SPEED
+        val strafeVector = Vector(
+            cos(strafeRad) * STRAFE_SPEED,
+            0.0,
+            sin(strafeRad) * STRAFE_SPEED
+        )
 
         // 合并移动向量
-        return direction.multiply(speed).add(Vector(strafeX, 0.0, strafeZ))
-    }
+        val moveVector = direction.multiply(speed).add(strafeVector)
 
-    private fun calculateOptimalSpeed(distance: Double): Double {
-        // 根据与最佳距离的差值动态调整速度
-        val distanceDiff = distance - OPTIMAL_COMBAT_DISTANCE
-        return distanceDiff * 0.1.coerceIn(-MIN_SPEED, MAX_SPEED)
-    }
+        // 随机跳跃逻辑
+        val cowId = UUID.randomUUID() // 这里应该使用实际的牛的UUID
+        val currentTime = System.currentTimeMillis()
+        val lastJump = lastJumpTime[cowId] ?: 0L
 
-    private fun handleStuckSituation(cow: Cow, moveVector: Vector) {
-        // 检测头顶方块
-        val headBlock = cow.location.clone().add(0.0, 1.0, 0.0).block
+        if (currentTime - lastJump > JUMP_COOLDOWN && Random.nextDouble() < 0.05) { // 5%的概率跳跃
+            moveVector.y = RANDOM_JUMP_POWER
+            lastJumpTime[cowId] = currentTime
+        }
 
-        Bukkit.getScheduler().runTask(plugin, Runnable {
-            if (headBlock.type.isSolid) {
-                // 如果头顶有方块，尝试向侧面移动
-                moveVector.add(Vector(
-                    (Math.random() - 0.5) * MAX_SPEED,
-                    0.0,
-                    (Math.random() - 0.5) * MAX_SPEED
-                ))
-            } else {
-                // 否则尝试跳跃
-                moveVector.setY(JUMP_POWER)
-            }
-
-            // 应用新的移动向量
-            cow.velocity = moveVector
-        })
-
-        // 重置卡住计时器
-        stuckTime[cow.uniqueId] = 0
+        return moveVector
     }
 
     private fun cleanup(cowId: UUID) {
         pathfindingTasks.remove(cowId)
         lastPositions.remove(cowId)
         stuckTime.remove(cowId)
+        lastAttackTime.remove(cowId)
+        lastJumpTime.remove(cowId) // 清理跳跃时间记录
     }
 
     fun stopPathfinding(cow: Cow) {
-        val cowId = cow.uniqueId
-        pathfindingTasks[cowId]?.cancel()
-        cleanup(cowId)
+        cleanup(cow.uniqueId)
+        pathfindingTasks[cow.uniqueId]?.cancel()
     }
 }

@@ -7,6 +7,8 @@ import org.bukkit.Material
 import org.bukkit.Particle
 import org.bukkit.Sound
 import org.bukkit.entity.*
+import org.bukkit.event.EventHandler
+import org.bukkit.event.entity.EntityExplodeEvent
 import org.bukkit.inventory.ItemStack
 import org.bukkit.inventory.meta.PotionMeta
 import org.bukkit.potion.PotionEffect
@@ -28,12 +30,12 @@ class ProjectileManager(private val plugin: SuperCow) {
         const val POTION_GRAVITY = 0.05
         const val SPLASH_RADIUS = 4.0
         val POTION_EFFECTS = mapOf(
-            PotionEffectType.POISON to Pair(200, 2),      // 中毒 10秒，等级2
+//            PotionEffectType.POISON to Pair(200, 2),      // 中毒 10秒，等级2
             PotionEffectType.WITHER to Pair(20, 1),      // 凋零 5秒，等级1
             PotionEffectType.SLOW to Pair(200, 2),        // 缓慢 5秒，等级2
             PotionEffectType.WEAKNESS to Pair(160, 2),    // 虚弱 8秒，等级2
-            PotionEffectType.HEAL to Pair(50, 1),   // 反胃 5秒，等级1
-            PotionEffectType.HEALTH_BOOST to Pair(50, 1),   // 反胃 5秒，等级1
+//            PotionEffectType.HEAL to Pair(50, 1),   // 反胃 5秒，等级1
+//            PotionEffectType.HEALTH_BOOST to Pair(50, 1),   // 反胃 5秒，等级1
         )
 
         // 火球配置
@@ -101,7 +103,7 @@ class ProjectileManager(private val plugin: SuperCow) {
 
         // 设置火球属性
         fireball.yield = if (isRageMode) Config.RAGE_FIREBALL_EXPLOSION_POWER else Config.FIREBALL_EXPLOSION_POWER
-        fireball.setIsIncendiary(true)
+        fireball.setIsIncendiary(false)  // 设置为false防止点燃
 
         // 设置初始速度和方向
         val initialDirection = calculateInitialDirection(shootLocation, target.location)
@@ -116,6 +118,26 @@ class ProjectileManager(private val plugin: SuperCow) {
 
         // 追踪控制
         startFireballTracking(fireball, target, isRageMode)
+    }
+    @EventHandler
+    fun onFireballHit(event: EntityExplodeEvent) {
+        val entity = event.entity
+        if (entity !is SmallFireball || !entity.hasMetadata("supercow_fireball")) {
+            return
+        }
+
+        // 阻止方块燃烧
+        event.blockList().clear()  // 可选：如果你不想破坏方块
+
+        // 创建不带火焰的爆炸效果
+        entity.world.createExplosion(
+            entity.location,
+            entity.yield,
+            false,  // 不产生火焰
+            true    // 破坏方块（可以根据需要设置为false）
+        )
+
+        event.isCancelled = true  // 取消原始爆炸
     }
 
     private fun calculateInitialDirection(from: Location, to: Location): Vector {

@@ -8,7 +8,6 @@ import net.dabbit.supercow.combat.TargetValidator
 import org.bukkit.*
 import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
-import org.bukkit.event.player.PlayerInteractEntityEvent
 import org.bukkit.plugin.java.JavaPlugin
 import org.bukkit.configuration.file.YamlConfiguration
 import java.io.File
@@ -22,13 +21,11 @@ import org.bukkit.command.Command
 import org.bukkit.command.CommandSender
 import org.bukkit.command.TabCompleter
 import org.bukkit.event.entity.EntityDeathEvent
-import org.bukkit.event.player.PlayerQuitEvent
 import java.util.*
 import java.util.concurrent.CompletableFuture
 import kotlin.collections.HashMap
 import org.bukkit.metadata.FixedMetadataValue
 
-import org.bukkit.event.player.PlayerInteractEvent
 import org.bukkit.inventory.EquipmentSlot
 
 import net.dabbit.supercow.pathfinding.PathfindingManager
@@ -36,7 +33,9 @@ import net.dabbit.supercow.combat.*
 import org.bukkit.entity.*
 import org.bukkit.event.entity.EntityDamageByEntityEvent
 import org.bukkit.event.entity.EntityDamageEvent
-import org.bukkit.event.player.PlayerJoinEvent
+import org.bukkit.event.player.*
+import org.spigotmc.event.entity.EntityDismountEvent
+import org.spigotmc.event.entity.EntityMountEvent
 
 class SuperCow : JavaPlugin(), Listener {
     private val petData = HashMap<String, SuperCowData>()
@@ -79,6 +78,7 @@ class SuperCow : JavaPlugin(), Listener {
         const val RESPAWN_DELAY = 100L  // 5秒 = 100 ticks
         const val RESPAWN_MESSAGE_DELAY = 20L  // 1秒 = 20 ticks
         const val MAX_SPAWN_FAILS = 3 // 最大生成失败次数
+        const val SADDLE_BOAT_METADATA = "SaddleBoat"
     }
 
     fun fixedMetadataValue(): FixedMetadataValue {
@@ -190,6 +190,8 @@ class SuperCow : JavaPlugin(), Listener {
         startFollowTask()
         startLostPetCleanupTask()
         startCombatCheckTask()
+        startNameUpdateTask()
+        startMountSyncTask()
 
         // 9. 显示启动信息
         val rainbowText = """
@@ -244,6 +246,27 @@ class SuperCow : JavaPlugin(), Listener {
                 }
             }.runTaskLater(this, 80L) // 40 ticks = 2 seconds
         }
+    }
+    private fun startNameUpdateTask() {
+        var colorIndex = 0
+        val colors = listOf("§c", "§6", "§e", "§a", "§b", "§d")
+
+        object : BukkitRunnable() {
+            override fun run() {
+                activePets.forEach { (playerName, cow) ->
+                    val data = petData[playerName] ?: return@forEach
+                    // 生成彩虹色 [REAL] 标记
+                    val rainbowTag = buildString {
+                        append(colors[colorIndex % colors.size])
+                        append("[REAL]")
+                    }
+
+                    cow.customName = "$rainbowTag §6${playerName}的超级小母牛 §7[Lv.${data.level}]"
+                    cow.isCustomNameVisible = true
+                }
+                colorIndex++
+            }
+        }.runTaskTimer(this, 0L, 10L) // 每0.5秒更新一次（10 ticks）
     }
 
     @EventHandler
@@ -379,7 +402,7 @@ class SuperCow : JavaPlugin(), Listener {
         updateCowStats(newCow, player.name, data)
 
         // 设置初始生命值为最大生命值的一半
-        val maxHealth = newCow.getAttribute(Attribute.GENERIC_MAX_HEALTH)?.value ?: 250.0
+        val maxHealth = newCow.getAttribute(Attribute.GENERIC_MAX_HEALTH)?.value ?: 180.0
         newCow.health = maxHealth / 2
 
         // 更新活跃宠物列表
@@ -696,14 +719,34 @@ class SuperCow : JavaPlugin(), Listener {
         val cow = player.world.spawnEntity(player.location, EntityType.COW) as Cow
         updateCowStats(cow, player.name, data)
 
+        // 设置可骑乘
+        cow.setAI(true)
+//        cow.isAdult = true
+
         activePets[player.name] = cow
         player.sendMessage("${PREFIX}§a成功召唤超级小母牛！")
         return true
+    }
+    private fun createSaddleBoat(cow: Cow): Boat {
+        val boat = cow.world.spawnEntity(cow.location, EntityType.BOAT) as Boat
+        boat.apply {
+            setMetadata(SADDLE_BOAT_METADATA, FixedMetadataValue(this@SuperCow, true))
+            isInvulnerable = true
+            isSilent = true
+//            isVisible = false  // 隐藏船模型
+            addPassenger(cow)  // 让牛坐在船上
+        }
+        return boat
     }
 
     fun recallPet(player: Player): Boolean {
         val cow = activePets.remove(player.name)
         if (cow != null) {
+            // 如果有玩家在骑乘，先让他们下来
+            cow.passengers.forEach { passenger ->
+                cow.removePassenger(passenger)
+            }
+
             cow.remove()
             player.sendMessage("${PREFIX}§a成功收回超级小母牛！")
             return true
@@ -712,20 +755,35 @@ class SuperCow : JavaPlugin(), Listener {
         return false
     }
 
+    private fun startMountSyncTask() {
+        object : BukkitRunnable() {
+            override fun run() {
+                activePets.values.forEach { cow ->
+                    // 保持船的位置同步
+                    cow.world.getNearbyEntities(cow.location, 1.0, 1.0, 1.0).firstOrNull {
+                        it.hasMetadata(SADDLE_BOAT_METADATA)
+                    }?.teleport(cow.location)
+                }
+            }
+        }.runTaskTimer(this, 0L, 5L)
+    }
+
     fun getPetStatus(player: Player): String {
         val data = petData[player.name] ?: return "${PREFIX}§c你还没有超级小母牛！"
         val cow = activePets[player.name]
+        val expNeeded = calculateExpNeeded(data.level)
 
         return """
-            §6=== 超级小母牛状态 ===
-            §f等级: §a${data.level}
-            §f经验值: §a${data.exp}/100
-            §f击杀数: §a${data.kills}
-            §f状态: §a${if (cow != null) "已召唤" else "未召唤"}
-            §f生命值: §a${cow?.health?.toInt() ?: 0}/${cow?.getAttribute(Attribute.GENERIC_MAX_HEALTH)?.value?.toInt() ?: 0}
-            §f攻击力: §a${5.0 + data.level}
-            §6==================
-        """.trimIndent()
+        §6=== 超级小母牛状态 ===
+        §f等级: §a${data.level}
+        §f经验值: §a${data.exp}/${expNeeded}
+        §f击杀数: §a${data.kills}
+        §f状态: §a${if (cow != null) "已召唤" else "未召唤"}
+        §f生命值: §a${cow?.health?.toInt() ?: 0}/${cow?.getAttribute(Attribute.GENERIC_MAX_HEALTH)?.value?.toInt() ?: 0}
+        §f最大生命值: §a${180 + (data.level - 1) * 20}❤
+        §f攻击力: §a${5.0 + data.level}
+        §6==================
+    """.trimIndent()
     }
 
     fun getActivePets(): Map<String, Cow> = activePets
@@ -733,25 +791,194 @@ class SuperCow : JavaPlugin(), Listener {
 
     fun addExpToPet(playerName: String, exp: Int) {
         val data = petData[playerName] ?: return
-        val cow = activePets[playerName] ?: return
+        val cow = activePets[playerName]
 
+        // 添加经验值
         data.exp += exp
-        if (data.exp >= 100) {
+
+        // 计算升级所需经验值
+        val expNeeded = calculateExpNeeded(data.level)
+
+        // 检查是否可以升级
+        while (data.exp >= expNeeded) {
+            // 升级
             data.level++
-            data.exp = 0
-            updateCowStats(cow, playerName, data)
-            server.getPlayer(playerName)?.sendMessage("${PREFIX}§a你的超级小母牛升级了！当前等级: ${data.level}")
+            data.exp -= expNeeded
+
+            // 更新牛的属性
+            cow?.let {
+                updateCowStats(it, playerName, data)
+
+                // 播放升级特效
+                playLevelUpEffects(it.location)
+            }
+
+            // 通知玩家
+            server.getPlayer(playerName)?.let { player ->
+                player.sendMessage("""
+                ${PREFIX}§6恭喜！你的超级小母牛升级了！
+                §f当前等级: §a${data.level}
+                §f最大生命值: §c${180 + (data.level - 1) * 20}❤
+                §f剩余经验: §a${data.exp}/${calculateExpNeeded(data.level)}
+            """.trimIndent())
+
+                // 播放声音
+                player.playSound(player.location, Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f)
+            }
+        }
+
+        // 保存数据
+        saveData()
+    }
+    private fun calculateExpNeeded(level: Int): Int {
+        return 100 + (level - 1) * 20  // 每级增加20点经验需求
+    }
+    private fun playLevelUpEffects(location: Location) {
+        location.world?.let { world ->
+            // 粒子效果
+            world.spawnParticle(
+                Particle.TOTEM,
+                location.add(0.0, 1.0, 0.0),
+                50,
+                0.5, 0.5, 0.5,
+                0.1
+            )
+
+            // 经验球效果
+            world.spawnParticle(
+                Particle.END_ROD,
+                location,
+                20,
+                0.5, 1.0, 0.5,
+                0.1
+            )
+
+            // 音效
+            world.playSound(
+                location,
+                Sound.ENTITY_PLAYER_LEVELUP,
+                1.0f,
+                1.0f
+            )
         }
     }
 
     private fun updateCowStats(cow: Cow, playerName: String, data: SuperCowData) {
         cow.customName = "§6${playerName}的超级小母牛 §7[Lv.${data.level}]"
         cow.isCustomNameVisible = true
-        cow.getAttribute(Attribute.GENERIC_MAX_HEALTH)?.baseValue = 40.0 + (data.level * 5)
-        cow.health = cow.getAttribute(Attribute.GENERIC_MAX_HEALTH)?.value ?: 40.0
-        cow.getAttribute(Attribute.GENERIC_MOVEMENT_SPEED)?.baseValue = 0.3
+
+        cow.setMetadata("SuperCowPet", FixedMetadataValue(this, true))
+
+
+        val maxHealth = 180.0 + (data.level - 1) * 20.0
+        cow.getAttribute(Attribute.GENERIC_MAX_HEALTH)?.baseValue = maxHealth
+
+        // 设置基础属性
+//        cow.getAttribute(Attribute.GENERIC_MAX_HEALTH)?.baseValue = 180.0
+        cow.health = cow.getAttribute(Attribute.GENERIC_MAX_HEALTH)?.value ?: 180.0
+        cow.getAttribute(Attribute.GENERIC_MOVEMENT_SPEED)?.baseValue = 0.25
         cow.getAttribute(Attribute.GENERIC_ATTACK_DAMAGE)?.baseValue = 5.0 + data.level
+
+        // 设置骑乘相关属性
+//        cow.isAdult = true
+        cow.ageLock = true // 防止变成小牛
+        cow.setAI(true)
+        cow.isCollidable = true
+
+        // 视觉效果
+        cow.isGlowing = true
+        cow.addScoreboardTag("RidableCow")
+
+        cow.health = maxHealth
     }
+
+    @EventHandler
+    fun onPlayerInteract(event: PlayerInteractEntityEvent) {
+        val entity = event.rightClicked
+        val player = event.player
+
+        if (entity !is Cow || !entity.hasMetadata("SuperCowPet")) return
+
+        // 检查是否是小母牛的主人
+        val ownerEntry = activePets.entries.find { it.value == entity } ?: return
+        if (ownerEntry.key != player.name) {
+            player.sendMessage("${PREFIX}§c这不是你的超级小母牛！")
+            return
+        }
+
+        // 如果玩家蹲着，不触发骑乘
+        if (player.isSneaking) return
+
+        event.isCancelled = true
+
+        // 如果已经在骑乘，则下马
+        if (entity.passengers.contains(player)) {
+            entity.removePassenger(player)
+            return
+        }
+
+        // 骑乘前检查
+        if (entity.passengers.isNotEmpty()) {
+            player.sendMessage("${PREFIX}§c已经有人在骑乘了！")
+            return
+        }
+
+        // 添加骑乘
+        entity.addPassenger(player)
+    }
+    @EventHandler
+    fun onPlayerMount(event: EntityMountEvent) {
+        val entity = event.getMount() // 使用 getMount()
+        val player = event.entity
+
+        if (entity !is Cow || !entity.hasMetadata("SuperCowPet") || player !is Player) return
+
+        // 设置骑乘状态
+        entity.getAttribute(Attribute.GENERIC_MOVEMENT_SPEED)?.baseValue = 0.4 // 提高骑乘时的速度
+    }
+
+    @EventHandler
+    fun onPlayerDismount(event: EntityDismountEvent) {
+        val entity = event.getDismounted() // 使用 getDismounted() 替代 mount
+        val player = event.entity
+
+        if (entity !is Cow || !entity.hasMetadata("SuperCowPet") || player !is Player) return
+
+        // 恢复正常速度
+        entity.getAttribute(Attribute.GENERIC_MOVEMENT_SPEED)?.baseValue = 0.25
+    }
+    @EventHandler
+    fun onMountMove(event: PlayerMoveEvent) {
+        val player = event.player
+        val vehicle = player.vehicle
+
+        if (vehicle !is Cow || !vehicle.hasMetadata("SuperCowPet")) return
+
+        // 获取玩家的视角方向
+        val direction = player.location.direction.normalize()
+
+        // 根据玩家按键状态调整移动
+        var speed = 0.0
+        if (player.isSprinting) {
+            speed = 0.4 // 疾跑速度
+        } else if (player.isFlying) {
+            speed = 0.0 // 禁止飞行时控制
+        } else {
+            speed = 0.2 // 普通移动速度
+        }
+
+        // 设置移动向量
+        if (speed > 0) {
+            val velocity = direction.multiply(speed)
+            vehicle.velocity = velocity.setY(vehicle.velocity.y)
+        }
+
+        // 如果玩家向上看，给予跳跃效果
+        if (player.location.pitch < -20 && vehicle.isOnGround) {
+            vehicle.velocity = vehicle.velocity.setY(0.5)
+        }
+    }
+
 
     private fun startTasks() {
         // 自动保存任务
@@ -798,13 +1025,59 @@ class SuperCow : JavaPlugin(), Listener {
 
     @EventHandler
     fun onEntityDeath(event: EntityDeathEvent) {
-        val killer = event.entity.killer
-        if (killer is Player) {
-            val pet = activePets[killer.name] ?: return
-            if (pet.location.distance(event.entity.location) <= 8.0) {
-                val data = petData[killer.name] ?: return
-                data.kills++
+        val entity = event.entity
+        val lastDamage = entity.lastDamageCause ?: return
+
+        // 只处理生物实体死亡
+        if (entity !is LivingEntity) return
+
+        // 获取最终伤害来源
+        val damager = when (lastDamage) {
+            is EntityDamageByEntityEvent -> {
+                when (val damagerEntity = lastDamage.damager) {
+                    is Projectile -> damagerEntity.shooter as? Cow ?: damagerEntity
+                    else -> damagerEntity
+                }
             }
+            else -> return
+        }
+
+        // 检查伤害来源是否是超级小母牛
+        val killerCow = when (damager) {
+            is Cow -> if (damager.hasMetadata("SuperCowPet")) damager else null
+            is Arrow -> (damager.shooter as? Cow)?.takeIf { it.hasMetadata("SuperCowPet") }
+            else -> null
+        } ?: return
+
+        // 查找小母牛的主人
+        val ownerEntry = activePets.entries.find { it.value == killerCow } ?: return
+        val ownerName = ownerEntry.key
+        val data = petData[ownerName] ?: return
+
+        // 计算获得的经验值
+        val expGain = calculateExpGain(entity)
+
+        // 分别更新击杀数和经验值
+        data.kills++               // 增加击杀数
+        addExpToPet(ownerName, expGain)  // 添加经验值
+
+        // 发送反馈信息
+        val player = server.getPlayer(ownerName)
+        player?.sendMessage("${PREFIX}§a你的超级小母牛击杀了 §e${entity.name}§a！获得 §6$expGain §a点经验值！")
+    }
+    private fun calculateExpGain(entity: LivingEntity): Int {
+        return when (entity) {
+            is Player -> 20  // 击杀玩家
+            is Monster -> when (entity) {
+                is Creeper -> 15
+                is Enderman -> 15
+                is Blaze -> 12
+                is Witch -> 12
+                is Skeleton, is Zombie -> 8
+                else -> 10
+            }
+            is Animals -> 5  // 普通动物
+            else -> 25        // 其他实体
         }
     }
 
@@ -853,7 +1126,7 @@ class SuperCowCommand(private val plugin: SuperCow) : CommandExecutor, TabComple
             "summon" -> plugin.summonPet(sender)
             "recall" -> plugin.recallPet(sender)
             "status" -> sender.sendMessage(plugin.getPetStatus(sender))
-            "version" -> sender.sendMessage("${SuperCow.PREFIX}§fv1.0 §7by YourName")
+            "version" -> sender.sendMessage("${SuperCow.PREFIX}§fv1.04 §7by dayi")
             "follow" -> {
                 val followEnabled = plugin.toggleFollowMode(sender)
                 sender.sendMessage(

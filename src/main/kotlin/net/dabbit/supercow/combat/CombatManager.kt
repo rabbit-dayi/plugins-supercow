@@ -105,6 +105,10 @@ class CombatManager(
         val targets = mutableSetOf<Entity>()
         targets.add(primaryTarget)
 
+        if (!isFriendlyTarget(primaryTarget, ownerName)) {
+            targets.add(primaryTarget)
+        }
+
         // 搜索周围实体并添加到目标
 //        cow.location.world?.getNearbyEntities(cow.location, SHOOT_RANGE, SHOOT_RANGE, SHOOT_RANGE)
 //            ?.filter { isValidAttackTarget(it) && it != primaryTarget }
@@ -298,8 +302,7 @@ class CombatManager(
                         entity is ArmorStand ||
                         entity is Villager ||
                         entity is WanderingTrader ||
-                        (entity is Tameable && entity.isTamed) ||
-                        entity is Cow)
+                        (entity is Tameable && entity.isTamed))
             }
             else -> false
         }
@@ -536,32 +539,32 @@ class CombatManager(
 
         attackCooldowns[cow.uniqueId.toString()] = currentTime
 
-        // 修改后的攻击类型选择，提高特殊攻击概率
+        // 修改后的攻击类型选择，大幅提高arrow概率
         val attackType = if (isRageMode) {
             when (Random.nextInt(1000)) {
-                in 0..599 -> "arrow"      // 60%
-                in 600..679 -> "firework"  // 8%
-                in 680..759 -> "potion"    // 8%
-                in 760..819 -> "fireball"  // 6%
-                in 820..869 -> "exploding_cow" // 5%
-                in 870..909 -> "chicken_bomb"  // 4%
-                in 910..949 -> "music_attack"  // 4%
-                in 950..969 -> "summon_cows"   // 2%
-                in 970..989 -> "summon_parrots" // 2%
-                else -> "summon_rabbits"       // 1%
+                in 0..899 -> "arrow"      // 90%
+                in 900..929 -> "firework"  // 3%
+                in 930..959 -> "potion"    // 3%
+                in 960..974 -> "fireball"  // 1.5%
+                in 975..984 -> "exploding_cow" // 1%
+                in 985..989 -> "chicken_bomb"  // 0.5%
+                in 990..994 -> "music_attack"  // 0.5%
+                in 995..996 -> "summon_cows"   // 0.2%
+                in 997..998 -> "summon_parrots" // 0.2%
+                else -> "summon_rabbits"       // 0.1%
             }
         } else {
             when (Random.nextInt(1000)) {
-                in 0..649 -> "arrow"      // 65%
-                in 650..719 -> "firework"  // 7%
-                in 720..789 -> "potion"    // 7%
-                in 790..839 -> "fireball"  // 5%
-                in 840..879 -> "exploding_cow" // 4%
-                in 880..909 -> "chicken_bomb"  // 3%
-                in 910..939 -> "music_attack"  // 3%
-                in 940..959 -> "summon_cows"   // 2%
-                in 960..979 -> "summon_parrots" // 2%
-                else -> "summon_rabbits"       // 2%
+                in 0..949 -> "arrow"      // 95%
+                in 950..964 -> "firework"  // 1.5%
+                in 965..979 -> "potion"    // 1.5%
+                in 980..984 -> "fireball"  // 0.5%
+                in 985..989 -> "exploding_cow" // 0.5%
+                in 990..992 -> "chicken_bomb"  // 0.3%
+                in 993..995 -> "music_attack"  // 0.3%
+                in 996..997 -> "summon_cows"   // 0.2%
+                in 998..998 -> "summon_parrots" // 0.1%
+                else -> "summon_rabbits"       // 0.1%
             }
         }
 
@@ -607,7 +610,7 @@ class CombatManager(
             "firework" -> fireworkManager.shootFirework(cow.location, target, isRageMode)
             "potion" -> projectileManager.shootPotion(cow.location, target, isRageMode)
             "fireball" -> projectileManager.shootFireball(cow.location, target, isRageMode)
-            "exploding_cow" -> explodingCowManager.launchExplodingCow(cow.location, target, isRageMode)
+            "exploding_cow" -> projectileManager.shootPotion(cow.location, target, isRageMode)
             "chicken_bomb" -> chickenBombardmentManager.startChickenBombardment(cow.location, target, isRageMode)
             "music_attack" -> musicAttackManager.startMusicAttack(cow.location, target, isRageMode)
             "summon_cows" -> summonManager.tryStartSummon(owner, cow, target, SummonManager.SummonType.COWS)

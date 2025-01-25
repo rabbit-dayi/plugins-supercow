@@ -9,12 +9,11 @@ import org.bukkit.entity.Entity
 import org.bukkit.scheduler.BukkitRunnable
 import org.bukkit.util.Vector
 import kotlin.random.Random
-
 class ExplodingCowManager(private val plugin: SuperCow) {
 
     object Config {
         // 通用配置
-        const val MAX_LIFETIME_TICKS = 100
+        const val MAX_LIFETIME_TICKS = 5
         const val TRACKING_SPEED = 0.2
         const val BASE_VELOCITY = 1.5
         const val RAGE_VELOCITY = 2.2
@@ -22,8 +21,9 @@ class ExplodingCowManager(private val plugin: SuperCow) {
         // 爆炸配置
         const val BASE_EXPLOSION_POWER = 2.0f
         const val RAGE_EXPLOSION_POWER = 3.5f
-        const val BASE_FIRE_TICKS = 60
-        const val RAGE_FIRE_TICKS = 100
+        // 移除火焰相关配置
+        // const val BASE_FIRE_TICKS = 60
+        // const val RAGE_FIRE_TICKS = 100
 
         // 音乐配置
         val FLYING_SOUNDS = listOf(
@@ -44,7 +44,8 @@ class ExplodingCowManager(private val plugin: SuperCow) {
         cow.isGlowing = true
         cow.setAI(false)
         cow.isInvulnerable = true
-        cow.fireTicks = if (isRageMode) Config.RAGE_FIRE_TICKS else Config.BASE_FIRE_TICKS
+        // 移除火焰设置
+        // cow.fireTicks = if (isRageMode) Config.RAGE_FIRE_TICKS else Config.BASE_FIRE_TICKS
 
         // 添加自定义标签
         cow.setMetadata("supercow_explosive", plugin.fixedMetadataValue())
@@ -61,13 +62,32 @@ class ExplodingCowManager(private val plugin: SuperCow) {
     }
 
     private fun calculateInitialDirection(from: Location, to: Location): Vector {
-        val direction = to.clone().subtract(from).toVector().normalize()
+        val distance = from.distance(to)
+
+        // 根据距离调整发射角度和速度
+        val heightGain = when {
+            distance < 5 -> 0.2
+            distance < 10 -> 0.3
+            distance < 15 -> 0.4
+            else -> 0.5
+        }
+
+        // 计算基础方向
+        val direction = to.clone().subtract(from).toVector()
+
+        // 水平距离
+        val horizontalDistance = Math.sqrt(direction.x * direction.x + direction.z * direction.z)
+
+        // 调整Y轴分量来创建抛物线
+        direction.y = horizontalDistance * heightGain
 
         // 添加随机偏移
-        val spread = 0.15
-        direction.x += Random.nextDouble(-spread, spread)
-        direction.y += Random.nextDouble(-spread, spread)
-        direction.z += Random.nextDouble(-spread, spread)
+        val spread = 0.1 * (distance / 10.0) // 距离越远spread越大
+        direction.apply {
+            x += Random.nextDouble(-spread, spread)
+            y += Random.nextDouble(-spread, spread)
+            z += Random.nextDouble(-spread, spread)
+        }
 
         return direction.normalize()
     }
@@ -88,9 +108,9 @@ class ExplodingCowManager(private val plugin: SuperCow) {
                 1.5f
             )
 
-            // 生成发射粒子
+            // 生成发射粒子，改用不含火焰的粒子
             spawnParticle(
-                if (isRageMode) Particle.FLAME else Particle.SMOKE_NORMAL,
+                Particle.SMOKE_NORMAL,
                 location.add(0.0, 1.0, 0.0),
                 30,
                 0.3, 0.3, 0.3,
@@ -155,9 +175,9 @@ class ExplodingCowManager(private val plugin: SuperCow) {
                 cowLoc.direction = newVel.clone().normalize()
                 cow.teleport(cowLoc)
 
-                // 飞行粒子效果
+                // 飞行粒子效果，改用不含火焰的粒子
                 cow.world.spawnParticle(
-                    if (isRageMode) Particle.FLAME else Particle.CLOUD,
+                    Particle.CLOUD,
                     cow.location,
                     5,
                     0.2, 0.2, 0.2,
@@ -176,12 +196,12 @@ class ExplodingCowManager(private val plugin: SuperCow) {
 
     private fun createCowExplosion(location: Location, isRageMode: Boolean) {
         location.world?.apply {
-            // 创建爆炸
+            // 创建爆炸，设置setFire为false
             createExplosion(
                 location,
                 if (isRageMode) Config.RAGE_EXPLOSION_POWER else Config.BASE_EXPLOSION_POWER,
-                true,
-                if (isRageMode) true else false
+                true,  // 破坏方块
+                false  // 不产生火焰
             )
 
             // 爆炸特效
@@ -205,15 +225,6 @@ class ExplodingCowManager(private val plugin: SuperCow) {
                 Sound.ENTITY_GENERIC_EXPLODE,
                 1.0f,
                 if (isRageMode) 0.5f else 1.0f
-            )
-
-            // 额外的血肉效果
-            spawnParticle(
-                Particle.BLOCK_CRACK,
-                location,
-                50,
-                0.5, 0.5, 0.5,
-                0.1
             )
         }
     }

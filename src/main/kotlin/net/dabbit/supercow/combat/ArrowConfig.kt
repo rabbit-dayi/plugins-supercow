@@ -9,8 +9,8 @@ class ArrowConfig {
         const val BASE_DAMAGE = 1.0
         const val RAGE_DAMAGE = 4.0
         const val HEAL_AMOUNT = 2.5
-        const val ARROW_SPEED = 2.0
-        const val RAGE_ARROW_SPEED = 3.0
+        const val ARROW_SPEED = 3.0
+        const val RAGE_ARROW_SPEED = 6.0
         const val ARROW_SPREAD = 0.0
         const val RAGE_SPREAD = 0.3
         const val FIREWORK_DAMAGE = 3.0

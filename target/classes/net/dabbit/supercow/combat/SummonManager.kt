@@ -28,11 +28,11 @@ class SummonManager(
 
     object Config {
         const val SUMMON_COUNT = 10
-        const val SUMMON_DURATION = 20 * 20L // 30秒
+        const val SUMMON_DURATION = 10 * 20L // 30秒
         const val ATTACK_COOLDOWN = 1L
         const val SHOOT_RANGE = 16.0
         const val BASE_DAMAGE = 8.0
-        const val RAGE_DAMAGE = 4.0
+        const val RAGE_DAMAGE = 16.0
 
         // 各种召唤物的属性
         object Cow {
@@ -41,14 +41,8 @@ class SummonManager(
             const val FOLLOW_RANGE = 20.0
         }
 
-//        object Parrot {
-//            const val MAX_HEALTH = 26.0
-//            const val MOVEMENT_SPEED = 0.4
-//            const val FLIGHT_HEIGHT = 5.0
-//        }
-
         object Rabbit {
-            const val MAX_HEALTH = 3.0
+            const val MAX_HEALTH = 12.0
             const val MOVEMENT_SPEED = 0.5
             const val JUMP_STRENGTH = 0.8
         }
@@ -214,14 +208,39 @@ class SummonManager(
                 ticks++
                 attackTicks++
 
-                val summons = activeSummons[playerName] ?: return
-                val iterator = summons.iterator()
+                // 立即检查目标状态
+                if (isTargetInvalid(target)) {
+                    plugin.server.scheduler.runTask(plugin, Runnable {
+                        clearSummons(playerName)
+                    })
+                    cancel()
+                    return
+                }
 
+                val summons = activeSummons[playerName] ?: return
+                if (summons.isEmpty()) {
+                    cancel()
+                    return
+                }
+
+                // 更新所有召唤物的行为
+                val iterator = summons.iterator()
                 while (iterator.hasNext()) {
                     val summon = iterator.next()
+
+                    // 检查召唤物状态
                     if (!summon.isValid || summon.isDead) {
                         iterator.remove()
                         continue
+                    }
+
+                    // 再次检查目标状态，确保在更新行为前目标仍然有效
+                    if (isTargetInvalid(target)) {
+                        plugin.server.scheduler.runTask(plugin, Runnable {
+                            clearSummons(playerName)
+                        })
+                        cancel()
+                        return
                     }
 
                     // 更新位置和行为
@@ -231,7 +250,7 @@ class SummonManager(
                         SummonType.COWS -> updateCowBehavior(summon as Cow, target)
                     }
 
-                    // 执行攻击
+                    // 处理攻击逻辑
                     if (attackTicks >= Config.ATTACK_COOLDOWN) {
                         when (type) {
                             SummonType.PARROTS, SummonType.COWS -> {
@@ -241,7 +260,11 @@ class SummonManager(
                             }
                             SummonType.RABBITS -> {
                                 if (summon.location.distance(target.location) <= 2.0) {
-                                    (target as? LivingEntity)?.damage(Config.BASE_DAMAGE, summon)
+                                    (target as? LivingEntity)?.let { livingTarget ->
+                                        if (!isTargetInvalid(livingTarget)) {
+                                            livingTarget.damage(Config.BASE_DAMAGE, summon)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -252,9 +275,11 @@ class SummonManager(
                     attackTicks = 0
                 }
 
-                // 检查是否到达持续时间
-                if (ticks >= Config.SUMMON_DURATION || summons.isEmpty()) {
-                    clearSummons(playerName)
+                // 检查持续时间
+                if (ticks >= Config.SUMMON_DURATION) {
+                    plugin.server.scheduler.runTask(plugin, Runnable {
+                        clearSummons(playerName)
+                    })
                     cancel()
                 }
             }
@@ -262,6 +287,13 @@ class SummonManager(
 
         summonTasks[playerName] = task
         task.runTaskTimer(plugin, 0L, 1L)
+    }
+
+    // 添加一个辅助方法来检查目标状态
+    private fun isTargetInvalid(target: Entity): Boolean {
+        return !target.isValid ||
+                target.isDead ||
+                (target as? LivingEntity)?.health?.let { it <= 0 } ?: false
     }
 
     private fun updateParrotBehavior(parrot: Parrot, target: Entity) {
@@ -339,24 +371,63 @@ class SummonManager(
         cow.velocity = finalDirection.multiply(Config.Cow.MOVEMENT_SPEED)
     }
 
+//    private fun shootArrow(shooter: LivingEntity, target: Entity) {
+//        val shootPos = shooter.location.clone().add(0.0, 1.5, 0.0)
+//        val velocity = trajectoryCalculator.calculateArrowVelocity(
+//            shootPos,
+//            target.location,
+//            1.5
+//        )
+//
+//        val arrow = shooter.world.spawnArrow(
+//            shootPos,
+//            velocity,
+//            1.5f,
+//            0f
+//        ).apply {
+//            this.shooter = shooter
+//            damage = Config.BASE_DAMAGE
+//            isCritical = true
+//            setMetadata("summon_arrow", plugin.fixedMetadataValue())
+//
+//            // 添加箭矢清理任务
+//            object : BukkitRunnable() {
+//                override fun run() {
+//                    if (isValid && !isDead) {
+//                        remove()
+//                    }
+//                }
+//            }.runTaskLater(plugin, 100L) // 5秒后清理
+//        }
+//
+//        playShootEffect(shooter.location)
+//    }
+
+
     private fun shootArrow(shooter: LivingEntity, target: Entity) {
         val shootPos = shooter.location.clone().add(0.0, 1.5, 0.0)
-        val velocity = trajectoryCalculator.calculateArrowVelocity(
-            shootPos,
-            target.location,
-            1.5
-        )
 
+        // 预测目标位置
+        val targetPos = predictTargetPosition(target)
+
+        // 计算射击参数
+        val (velocity, shootAngle) = calculateShootParameters(shootPos, targetPos)
+
+        // 生成箭矢
         val arrow = shooter.world.spawnArrow(
             shootPos,
             velocity,
             1.5f,
-            0f
+            shootAngle
         ).apply {
             this.shooter = shooter
             damage = Config.BASE_DAMAGE
             isCritical = true
             setMetadata("summon_arrow", plugin.fixedMetadataValue())
+
+            // 设置箭矢的其他属性
+            pickupStatus = AbstractArrow.PickupStatus.DISALLOWED
+            knockbackStrength = 1
 
             // 添加箭矢清理任务
             object : BukkitRunnable() {
@@ -365,10 +436,76 @@ class SummonManager(
                         remove()
                     }
                 }
-            }.runTaskLater(plugin, 100L) // 5秒后清理
+            }.runTaskLater(plugin, Config.Arrow.CLEANUP_DELAY)
         }
 
         playShootEffect(shooter.location)
+    }
+
+    private fun predictTargetPosition(target: Entity): Location {
+        val targetLoc = target.location.clone()
+        val targetVelocity = target.velocity
+
+        // 预测时间（ticks）- 可以根据距离动态调整
+        val predictionTime = 10
+
+        // 考虑目标的移动方向和速度
+        targetLoc.add(
+            targetVelocity.x * predictionTime,
+            targetVelocity.y * predictionTime + 0.5, // 稍微往上瞄准一点
+            targetVelocity.z * predictionTime
+        )
+
+        return targetLoc
+    }
+
+    private fun calculateShootParameters(shootPos: Location, targetPos: Location): Pair<Vector, Float> {
+        // 计算基础方向向量
+        val direction = targetPos.clone().subtract(shootPos).toVector()
+
+        // 计算水平距离
+        val horizontalDistance = Math.sqrt(direction.x * direction.x + direction.z * direction.z)
+
+        // 计算所需的仰角
+        val gravity = 0.05 // Minecraft的重力加速度
+        val velocityXZ = 1.5 // 水平速度
+        val velocityY = direction.y / horizontalDistance + gravity * horizontalDistance / (2 * velocityXZ)
+
+        // 标准化方向向量
+        direction.normalize()
+
+        // 应用计算后的速度分量
+        val velocity = Vector(
+            direction.x * velocityXZ,
+            velocityY,
+            direction.z * velocityXZ
+        )
+
+        // 计算扩散角度（根据距离调整）
+        val spread = when {
+            horizontalDistance < 5 -> 0f
+            horizontalDistance < 10 -> 1f
+            else -> 2f
+        }
+
+        return Pair(velocity, spread)
+    }
+
+    private fun getModifiedVelocity(baseVelocity: Vector, distance: Double): Vector {
+        // 根据距离调整速度
+        val speedMultiplier = when {
+            distance < 5 -> 1.2
+            distance < 10 -> 1.5
+            distance < 15 -> 1.8
+            else -> 2.0
+        }
+
+        return baseVelocity.multiply(speedMultiplier)
+    }
+
+    // 可以添加一个帮助方法来计算两点间的距离
+    private fun getDistance(loc1: Location, loc2: Location): Double {
+        return loc1.distance(loc2)
     }
     @EventHandler
     fun onArrowHit(event: EntityDamageByEntityEvent) {
@@ -381,11 +518,11 @@ class SummonManager(
         val victim = event.entity
 
         // 检查是否是队友伤害
-        if (isFriendlyFire(shooter, victim)) {
-            event.isCancelled = true
-            damager.remove()
-            return
-        }
+//        if (isFriendlyFire(shooter, victim)) {
+//            event.isCancelled = true
+//            damager.remove()
+//            return
+//        }
 
         // 设置伤害值
         event.damage = Config.BASE_DAMAGE
@@ -464,13 +601,37 @@ class SummonManager(
         activeSummons[playerName]?.forEach { summon ->
             if (summon.isValid) {
                 // 播放消失效果
-                summon.world.spawnParticle(
-                    Particle.SMOKE_NORMAL,
-                    summon.location,
-                    10,
-                    0.2, 0.2, 0.2,
-                    0.05
-                )
+                summon.world.apply {
+                    // 增加更多粒子效果
+                    spawnParticle(
+                        Particle.SMOKE_NORMAL,
+                        summon.location,
+                        15,  // 增加粒子数量
+                        0.3, 0.3, 0.3,  // 增加扩散范围
+                        0.05
+                    )
+                    spawnParticle(
+                        Particle.PORTAL,
+                        summon.location,
+                        10,
+                        0.2, 0.2, 0.2,
+                        0.05
+                    )
+
+                    // 播放更明显的音效组合
+                    playSound(
+                        summon.location,
+                        Sound.ENTITY_ENDERMAN_TELEPORT,
+                        0.5f,
+                        1.2f
+                    )
+                    playSound(
+                        summon.location,
+                        Sound.BLOCK_BEACON_DEACTIVATE,
+                        0.3f,
+                        1.5f
+                    )
+                }
                 summon.remove()
             }
         }
