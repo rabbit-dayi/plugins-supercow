@@ -27,7 +27,7 @@ class CombatManager(
     private val musicAttackManager: MusicAttackManager
 
 ) : Listener {
-    private val currentTargets = mutableMapOf<String, MutableSet<Entity>>()
+    private val currentTargets = mutableMapOf<String, ArrayDeque<Entity>>()
     private val attackCooldowns = mutableMapOf<String, Long>()
     private val arrowTasks = mutableMapOf<String, BukkitRunnable>()
     private val glowingTargets = mutableMapOf<String, MutableSet<Entity>>()
@@ -134,31 +134,50 @@ class CombatManager(
         arrow.remove()
     }
 
+
     private fun setNewTargets(ownerName: String, newTargets: Set<Entity>, cow: Cow) {
-        // 移除旧目标的高亮和寻路
-        currentTargets[ownerName]?.forEach { oldTarget ->
-            if (!newTargets.contains(oldTarget)) {
+        // 过滤掉不应该攻击的目标
+        val validTargets = newTargets.filter { target ->
+            !isFriendlyTarget(target, ownerName) &&
+                    isValidAttackTarget(target) &&
+                    target != cow
+        }
+
+        // 如果没有有效目标，清除所有目标并返回
+        if (validTargets.isEmpty()) {
+            clearCombatTarget(ownerName)
+            return
+        }
+
+        // 获取或创建目标栈
+        val targetStack = currentTargets.getOrPut(ownerName) { ArrayDeque() }
+
+        // 移除旧的无效目标
+        targetStack.removeAll { oldTarget ->
+            if (!validTargets.contains(oldTarget)) {
                 stopGlowing(ownerName, oldTarget)
-                pathfindingManager.stopPathfinding(cow)
+                true
+            } else false
+        }
+
+        // 添加新目标到栈中
+        validTargets.forEach { target ->
+            if (!targetStack.contains(target)) {
+                targetStack.addFirst(target) // 新目标优先
+                startGlowing(ownerName, target)
             }
         }
 
-        // 设置新目标
-        currentTargets[ownerName] = newTargets.toMutableSet()
-
-        // 选择主要目标进行寻路
-        val primaryTarget = newTargets.firstOrNull()
+        // 获取当前最优先的目标进行寻路
+        val primaryTarget = targetStack.firstOrNull()
         if (primaryTarget != null) {
             pathfindingManager.startPathfinding(cow, primaryTarget)
-        }
-
-        newTargets.forEach { target ->
-            startGlowing(ownerName, target)
             startShooting(ownerName, cow)
         }
 
         checkRageMode(cow, ownerName)
     }
+
     private fun checkRageMode(cow: Cow, ownerName: String) {
         val maxHealth = cow.getAttribute(Attribute.GENERIC_MAX_HEALTH)?.value ?: 20.0
         val currentHealth = cow.health
@@ -172,33 +191,39 @@ class CombatManager(
 
         val shootTask = object : BukkitRunnable() {
             override fun run() {
-                val targets = currentTargets[ownerName] ?: return
-                val iterator = targets.iterator()
-
-                while (iterator.hasNext()) {
-                    val target = iterator.next()
-                    if (!isValidAttackTarget(target) ||
-                        !cow.isValid ||
-                        cow.location.distance(target.location) > SHOOT_RANGE
-                    ) {
-                        stopGlowing(ownerName, target)
-                        iterator.remove()
-                        continue
-                    }
-
-                    // 让牛面向目标
-                    faceCowToTarget(cow, target.location)
-                    shootArrow(cow, target, ownerName)
-                }
-
-                if (targets.isEmpty()) {
+                val targetStack = currentTargets[ownerName] ?: return
+                if (targetStack.isEmpty()) {
                     stopShooting(ownerName)
+                    return
                 }
+
+                // 处理当前最优先的目标
+                val currentTarget = targetStack.firstOrNull() ?: return
+                if (!isValidAttackTarget(currentTarget) ||
+                    !cow.isValid ||
+                    cow.location.distance(currentTarget.location) > SHOOT_RANGE
+                ) {
+                    stopGlowing(ownerName, currentTarget)
+                    targetStack.removeFirst()
+
+                    // 如果还有其他目标，切换到下一个目标
+                    val nextTarget = targetStack.firstOrNull()
+                    if (nextTarget != null) {
+                        pathfindingManager.startPathfinding(cow, nextTarget)
+                    } else {
+                        stopShooting(ownerName)
+                        pathfindingManager.stopPathfinding(cow)
+                    }
+                    return
+                }
+
+                // 执行攻击
+                faceCowToTarget(cow, currentTarget.location)
+                shootArrow(cow, currentTarget, ownerName)
             }
         }
 
         arrowTasks[ownerName] = shootTask
-        // 根据目标血量调整攻击速度
         val attackSpeed = calculateAttackSpeed(currentTargets[ownerName]?.firstOrNull())
         shootTask.runTaskTimer(plugin, 0L, attackSpeed)
     }
@@ -244,18 +269,27 @@ class CombatManager(
         return target
     }
     private fun isFriendlyTarget(target: Entity, playerName: String): Boolean {
+        // 检查目标是否是主人
+        if (target is Player && target.name == playerName) {
+            return true
+        }
+
         // 检查是否是超级牛宠物
-        if (plugin.getActivePets().containsValue(target)) {
-            return false
+        if (target is Cow && target.hasMetadata("SuperCowPet")) {
+            val ownerEntry = plugin.getActivePets().entries.find { it.value == target }
+            // 如果是自己的超级小母牛，则认为是友好目标
+            return ownerEntry?.key == playerName
         }
 
         // 检查是否是召唤物
         val summonManager = plugin.summonmgr
-        return summonManager.activeSummons.any {
-            (ownerName, summons) ->
-            // 检查目标是否是任何玩家的召唤物
-            summons.contains(target)
+        if (summonManager.activeSummons.any { (ownerName, summons) ->
+                summons.contains(target) && ownerName == playerName
+            }) {
+            return true // 自己的召唤物是友好目标
         }
+
+        return false // 其他情况都视为非友好目标
     }
 
 
@@ -328,40 +362,28 @@ class CombatManager(
     }
 
     fun checkAndUpdateTargets() {
-        val iterator = currentTargets.entries.iterator()
-        while (iterator.hasNext()) {
-            val (playerName, targets) = iterator.next()
-            val cow = plugin.getActivePets()[playerName] ?: continue
+        currentTargets.entries.removeIf { (playerName, targetStack) ->
+            val cow = plugin.getActivePets()[playerName] ?: return@removeIf true
 
-            // 使用内部迭代器来安全地移除无效目标
-            val targetIterator = targets.iterator()
-            var primaryTargetRemoved = false
-            var firstTarget = targets.firstOrNull()
-
-            while (targetIterator.hasNext()) {
-                val target = targetIterator.next()
+            // 移除无效目标
+            targetStack.removeAll { target ->
                 if (!isValidAttackTarget(target) ||
                     cow.location.distance(target.location) > SHOOT_RANGE
                 ) {
                     stopGlowing(playerName, target)
-                    if (target == firstTarget) {
-                        primaryTargetRemoved = true
-                    }
-                    targetIterator.remove()
-                }
+                    true
+                } else false
             }
 
-            // 如果主要目标被移除，更新寻路目标
-            if (primaryTargetRemoved && targets.isNotEmpty()) {
-                val newPrimaryTarget = targets.first()
-                pathfindingManager.startPathfinding(cow, newPrimaryTarget)
-            }
-
-            // 如果该玩家的所有目标都被移除，则停止射击和寻路
-            if (targets.isEmpty()) {
+            // 如果栈为空，清理相关资源
+            if (targetStack.isEmpty()) {
                 stopShooting(playerName)
                 pathfindingManager.stopPathfinding(cow)
-                iterator.remove()
+                true
+            } else {
+                // 确保追踪最优先的目标
+                pathfindingManager.startPathfinding(cow, targetStack.first())
+                false
             }
         }
     }
@@ -417,11 +439,10 @@ class CombatManager(
         currentTargets[playerName]?.forEach { target ->
             stopGlowing(playerName, target)
         }
+        currentTargets[playerName]?.clear()
         currentTargets.remove(playerName)
         stopShooting(playerName)
         rageMode.remove(playerName)
-
-        // 停止寻路
         pathfindingManager.stopPathfinding(cow)
     }
 

@@ -345,4 +345,6 @@ class PathfindingManager(private val plugin: SuperCow) {
         cleanup(cow.uniqueId)
         pathfindingTasks[cow.uniqueId]?.cancel()
     }
+
+
 }
