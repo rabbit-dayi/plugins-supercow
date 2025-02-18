@@ -517,6 +517,11 @@ class SuperCow : JavaPlugin(), Listener {
                             player.sendMessage("${PREFIX}§a由于原宠物所在区块未加载，已为你创建新的超级小母牛！")
                         } else {
                             player.sendMessage("${PREFIX}§c无法加载目标区块，请稍后重试！")
+                            val newCow = player.world.spawnEntity(targetLocation, EntityType.COW) as Cow
+                            val data = petData[player.name] ?: return@Runnable
+                            updateCowStats(newCow, player.name, data)
+                            activePets[player.name] = newCow
+                            player.sendMessage("${PREFIX}§a由于原宠物所在区块未加载，已为你创建新的超级小母牛！")
                         }
                     } catch (e: Exception) {
                         logger.warning("Failed to load chunk for pet teleport: ${e.message}")
