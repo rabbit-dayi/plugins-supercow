@@ -233,15 +233,15 @@ class FireworkManager(private val plugin: SuperCow) {
             Color.LIME, Color.MAROON, Color.NAVY, Color.OLIVE, Color.TEAL
         )
 
-        return buildList {
-            repeat(count) {
-                val baseColor = baseColors.random()
-                add(Color.fromRGB(
-                    (baseColor.red + (-20..20).random()).coerceIn(0..255),
-                    (baseColor.green + (-20..20).random()).coerceIn(0..255),
-                    (baseColor.blue + (-20..20).random()).coerceIn(0..255)
-                ))
-            }
+        val colors = ArrayList<Color>()
+        repeat(count) {
+            val baseColor = baseColors.random()
+            colors.add(Color.fromRGB(
+                (baseColor.red + (-20..20).random()).coerceIn(0..255),
+                (baseColor.green + (-20..20).random()).coerceIn(0..255),
+                (baseColor.blue + (-20..20).random()).coerceIn(0..255)
+            ))
         }
+        return colors
     }
 }

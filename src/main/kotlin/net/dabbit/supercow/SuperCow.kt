@@ -511,7 +511,7 @@ class SuperCow : JavaPlugin(), Listener {
                 CompletableFuture.runAsync {
                     try {
                         // 在异步线程中加载区块
-                        targetLocation.chunk.load(true)
+//                        targetLocation.chunk.load(true)
 
                         // 返回主线程生成实体
                         server.scheduler.runTask(this, Runnable {
