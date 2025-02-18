@@ -653,7 +653,7 @@ class CombatManager(
             "fireball" -> projectileManager.shootFireball(cow.location, target, isRageMode)
             "exploding_cow" -> projectileManager.shootPotion(cow.location, target, isRageMode)
             "chicken_bomb" -> chickenBombardmentManager.startChickenBombardment(cow.location, target, isRageMode)
-            "music_attack" -> musicAttackManager.startMusicAttack(cow.location, target, isRageMode)
+            "music_attack" -> projectileManager.shootFireball(cow.location, target, isRageMode)
             "summon_cows" -> summonManager.tryStartSummon(owner, cow, target, SummonManager.SummonType.COWS)
             "summon_parrots" -> summonManager.tryStartSummon(owner, cow, target, SummonManager.SummonType.PARROTS)
             "summon_rabbits" -> summonManager.tryStartSummon(owner, cow, target, SummonManager.SummonType.RABBITS)

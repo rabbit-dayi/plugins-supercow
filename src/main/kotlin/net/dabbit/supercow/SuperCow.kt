@@ -481,7 +481,7 @@ class SuperCow : JavaPlugin(), Listener {
                         true
                     } else {
                         // 尝试移除未被加载区块中的实体
-                        if (!cow.location.chunk.isLoaded) {
+                        if (false) {
                             cow.remove()
                             logger.info("Removed lost pet in unloaded chunk for player $playerName")
                             true
@@ -498,39 +498,31 @@ class SuperCow : JavaPlugin(), Listener {
         val targetLocation = findSafeLocation(player.location)
         if (targetLocation != null) {
             // 如果目标位置所在区块已加载，直接传送
-            if (targetLocation.chunk.isLoaded) {
+            if (false) {
                 cow.teleport(targetLocation)
                 server.scheduler.runTaskLater(this, Runnable {
                     checkAndRespawnPet(player, cow)
                 }, 5L) // 等待5tick后检查位置
 //                player.sendMessage("${PREFIX}§a你的超级小母牛已传送到你身边！")
             } else {
-                // 如果区块未加载，创建新的宠物并记录旧的
-                lostPets[player.name] = cow
-                activePets.remove(player.name)
-                CompletableFuture.runAsync {
+                // 如果区块未加载，在主线程加载区块
+                server.scheduler.runTask(this, Runnable {
                     try {
-                        // 在异步线程中加载区块
 //                        targetLocation.chunk.load(true)
-
-                        // 返回主线程生成实体
-                        server.scheduler.runTask(this, Runnable {
-                            if (targetLocation.chunk.isLoaded) {
-                                val newCow = player.world.spawnEntity(targetLocation, EntityType.COW) as Cow
-                                val data = petData[player.name] ?: return@Runnable
-                                updateCowStats(newCow, player.name, data)
-                                activePets[player.name] = newCow
-                                player.sendMessage("${PREFIX}§a由于原宠物所在区块未加载，已为你创建新的超级小母牛！")
-                            } else {
-                                player.sendMessage("${PREFIX}§c无法加载目标区块，请稍后重试！")
-                            }
-                        })
+                        if (false) {
+                            val newCow = player.world.spawnEntity(targetLocation, EntityType.COW) as Cow
+                            val data = petData[player.name] ?: return@Runnable
+                            updateCowStats(newCow, player.name, data)
+                            activePets[player.name] = newCow
+                            player.sendMessage("${PREFIX}§a由于原宠物所在区块未加载，已为你创建新的超级小母牛！")
+                        } else {
+                            player.sendMessage("${PREFIX}§c无法加载目标区块，请稍后重试！")
+                        }
                     } catch (e: Exception) {
                         logger.warning("Failed to load chunk for pet teleport: ${e.message}")
                         player.sendMessage("${PREFIX}§c传送失败，请稍后重试！")
                     }
-                }
-                //
+                })
             }
         } else {
             forceRespawnAtPlayer(player)

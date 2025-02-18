@@ -10,7 +10,7 @@ class ArrowConfig {
         const val RAGE_DAMAGE = 4.0
         const val HEAL_AMOUNT = 2.5
 
-        const val BASE_ARROW_SPEED = 4.2
+        const val BASE_ARROW_SPEED = 3.2
         const val SPEED_PER_LEVEL = 0.15  // 每级增加的速度
         const val MAX_LEVEL = 80          // 最大等级
         const val RAGE_MULTIPLIER = 2.0   // 狂暴模式倍率
