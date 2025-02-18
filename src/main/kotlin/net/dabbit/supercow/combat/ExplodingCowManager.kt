@@ -198,7 +198,9 @@ class ExplodingCowManager(private val plugin: SuperCow) {
         location.world?.apply {
             // 创建爆炸，设置setFire为false
             createExplosion(
-                location,
+                location.x,
+                location.y,
+                location.z,
                 if (isRageMode) Config.RAGE_EXPLOSION_POWER else Config.BASE_EXPLOSION_POWER,
                 true,  // 破坏方块
                 false  // 不产生火焰

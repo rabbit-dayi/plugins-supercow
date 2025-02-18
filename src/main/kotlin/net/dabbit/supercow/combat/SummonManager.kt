@@ -2,6 +2,7 @@ package net.dabbit.supercow.combat
 
 import net.dabbit.supercow.SuperCow
 import org.bukkit.*
+import org.bukkit.enchantments.Enchantment
 import org.bukkit.entity.*
 import org.bukkit.event.Listener
 import org.bukkit.inventory.ItemStack
@@ -14,6 +15,8 @@ import kotlin.random.Random
 import org.bukkit.event.EventHandler
 import org.bukkit.event.entity.EntityDamageByEntityEvent
 import org.bukkit.event.player.PlayerInteractEntityEvent
+import org.bukkit.potion.PotionEffect
+import org.bukkit.potion.PotionEffectType
 
 class SummonManager(
     private val plugin: SuperCow,
@@ -197,6 +200,98 @@ class SummonManager(
         startSummonTask(player.name, target, SummonType.RABBITS)
     }
 
+//    private fun startSummonTask(playerName: String, target: Entity, type: SummonType) {
+//        summonTasks[playerName]?.cancel()
+//
+//        val task = object : BukkitRunnable() {
+//            var ticks = 0
+//            var attackTicks = 0
+//
+//            override fun run() {
+//                ticks++
+//                attackTicks++
+//
+//                // 立即检查目标状态
+//                if (isTargetInvalid(target)) {
+//                    plugin.server.scheduler.runTask(plugin, Runnable {
+//                        clearSummons(playerName)
+//                    })
+//                    cancel()
+//                    return
+//                }
+//
+//                val summons = activeSummons[playerName] ?: return
+//                if (summons.isEmpty()) {
+//                    cancel()
+//                    return
+//                }
+//
+//                // 更新所有召唤物的行为
+//                val iterator = summons.iterator()
+//                while (iterator.hasNext()) {
+//                    val summon = iterator.next()
+//
+//                    // 检查召唤物状态
+//                    if (!summon.isValid || summon.isDead) {
+//                        iterator.remove()
+//                        continue
+//                    }
+//
+//                    // 再次检查目标状态，确保在更新行为前目标仍然有效
+//                    if (isTargetInvalid(target)) {
+//                        plugin.server.scheduler.runTask(plugin, Runnable {
+//                            clearSummons(playerName)
+//                        })
+//                        cancel()
+//                        return
+//                    }
+//
+//                    // 更新位置和行为
+//                    when (type) {
+//                        SummonType.PARROTS -> updateParrotBehavior(summon as Parrot, target)
+//                        SummonType.RABBITS -> updateRabbitBehavior(summon as Rabbit, target)
+//                        SummonType.COWS -> updateCowBehavior(summon as Cow, target)
+//                    }
+//
+//                    // 处理攻击逻辑
+//                    if (attackTicks >= Config.ATTACK_COOLDOWN) {
+//                        when (type) {
+//                            SummonType.PARROTS, SummonType.COWS -> {
+//                                if (summon.location.distance(target.location) <= Config.SHOOT_RANGE) {
+//                                    shootArrow(summon, target)
+//                                }
+//                            }
+//                            SummonType.RABBITS -> {
+//                                if (summon.location.distance(target.location) <= 2.0) {
+//                                    (target as? LivingEntity)?.let { livingTarget ->
+//                                        if (!isTargetInvalid(livingTarget)) {
+//                                            livingTarget.damage(Config.BASE_DAMAGE, summon)
+//                                        }
+//                                    }
+//                                }
+//                            }
+//                        }
+//                    }
+//                }
+//
+//                if (attackTicks >= Config.ATTACK_COOLDOWN) {
+//                    attackTicks = 0
+//                }
+//
+//                // 检查持续时间
+//                if (ticks >= Config.SUMMON_DURATION) {
+//                    plugin.server.scheduler.runTask(plugin, Runnable {
+//                        clearSummons(playerName)
+//                    })
+//                    cancel()
+//                }
+//            }
+//        }
+//
+//        summonTasks[playerName] = task
+//        task.runTaskTimer(plugin, 0L, 1L)
+//    }
+
     private fun startSummonTask(playerName: String, target: Entity, type: SummonType) {
         summonTasks[playerName]?.cancel()
 
@@ -210,9 +305,9 @@ class SummonManager(
 
                 // 立即检查目标状态
                 if (isTargetInvalid(target)) {
-                    plugin.server.scheduler.runTask(plugin, Runnable {
+                    plugin.server.scheduler.runTask(plugin) {
                         clearSummons(playerName)
-                    })
+                    }
                     cancel()
                     return
                 }
@@ -236,9 +331,9 @@ class SummonManager(
 
                     // 再次检查目标状态，确保在更新行为前目标仍然有效
                     if (isTargetInvalid(target)) {
-                        plugin.server.scheduler.runTask(plugin, Runnable {
+                        plugin.server.scheduler.runTask(plugin) {
                             clearSummons(playerName)
-                        })
+                        }
                         cancel()
                         return
                     }
@@ -255,7 +350,7 @@ class SummonManager(
                         when (type) {
                             SummonType.PARROTS, SummonType.COWS -> {
                                 if (summon.location.distance(target.location) <= Config.SHOOT_RANGE) {
-                                    shootArrow(summon, target)
+                                    shootArrow(summon as LivingEntity, target, plugin)
                                 }
                             }
                             SummonType.RABBITS -> {
@@ -277,9 +372,9 @@ class SummonManager(
 
                 // 检查持续时间
                 if (ticks >= Config.SUMMON_DURATION) {
-                    plugin.server.scheduler.runTask(plugin, Runnable {
+                    plugin.server.scheduler.runTask(plugin) {
                         clearSummons(playerName)
-                    })
+                    }
                     cancel()
                 }
             }
@@ -288,6 +383,7 @@ class SummonManager(
         summonTasks[playerName] = task
         task.runTaskTimer(plugin, 0L, 1L)
     }
+
 
     // 添加一个辅助方法来检查目标状态
     private fun isTargetInvalid(target: Entity): Boolean {
@@ -404,7 +500,7 @@ class SummonManager(
 //    }
 
 
-    private fun shootArrow(shooter: LivingEntity, target: Entity) {
+    private fun shootArrow(shooter: LivingEntity, target: Entity, plugin: SuperCow) {
         val shootPos = shooter.location.clone().add(0.0, 1.5, 0.0)
 
         // 预测目标位置
@@ -419,28 +515,38 @@ class SummonManager(
             velocity,
             1.5f,
             shootAngle
-        ).apply {
-            this.shooter = shooter
-            damage = Config.BASE_DAMAGE
-            isCritical = true
-            setMetadata("summon_arrow", plugin.fixedMetadataValue())
+        ) as Arrow
 
-            // 设置箭矢的其他属性
-            pickupStatus = AbstractArrow.PickupStatus.DISALLOWED
-            knockbackStrength = 1
+        arrow.shooter = shooter
 
-            // 添加箭矢清理任务
-            object : BukkitRunnable() {
-                override fun run() {
-                    if (isValid && !isDead) {
-                        remove()
-                    }
-                }
-            }.runTaskLater(plugin, Config.Arrow.CLEANUP_DELAY)
+        // 通过给射击实体的弓添加附魔来增强箭矢伤害
+        val bow = ItemStack(org.bukkit.Material.BOW)
+        val meta = bow.itemMeta
+        if (meta != null) {
+            meta.addEnchant(Enchantment.ARROW_DAMAGE, (Config.BASE_DAMAGE / 2).toInt(), true)
         }
+        bow.itemMeta = meta
+
+        // 虽然实际中射击实体不一定手持弓，但可以模拟这种效果
+        arrow.knockbackStrength = 1
+        arrow.isCritical = true
+        arrow.setMetadata("summon_arrow", plugin.fixedMetadataValue())
+
+        // 设置箭矢的其他属性
+//        arrow.pickupStatus = Arrow.PickupStatus.DISALLOWED
+
+        // 添加箭矢清理任务
+        object : BukkitRunnable() {
+            override fun run() {
+                if (arrow.isValid && !arrow.isDead) {
+                    arrow.remove()
+                }
+            }
+        }.runTaskLater(plugin, 20L)
 
         playShootEffect(shooter.location)
     }
+
 
     private fun predictTargetPosition(target: Entity): Location {
         val targetLoc = target.location.clone()
@@ -621,13 +727,13 @@ class SummonManager(
                     // 播放更明显的音效组合
                     playSound(
                         summon.location,
-                        Sound.ENTITY_ENDERMAN_TELEPORT,
+                        Sound.BLOCK_GLASS_BREAK,
                         0.5f,
                         1.2f
                     )
                     playSound(
                         summon.location,
-                        Sound.BLOCK_BEACON_DEACTIVATE,
+                        Sound.ENTITY_COW_AMBIENT,
                         0.3f,
                         1.5f
                     )

@@ -2,7 +2,6 @@ package net.dabbit.supercow.combat
 
 import net.dabbit.supercow.SuperCow
 import org.bukkit.Location
-import org.bukkit.Note
 import org.bukkit.Particle
 import org.bukkit.Sound
 import org.bukkit.entity.Entity
@@ -19,12 +18,12 @@ class MusicAttackManager(private val plugin: SuperCow) {
     object Config {
         // 音乐配置
         val ATTACK_SOUNDS = listOf(
-            Sound.BLOCK_NOTE_BLOCK_BASS,
-            Sound.BLOCK_NOTE_BLOCK_SNARE,
-            Sound.BLOCK_NOTE_BLOCK_HARP,
-            Sound.BLOCK_NOTE_BLOCK_CHIME,
-            Sound.BLOCK_NOTE_BLOCK_XYLOPHONE,
-            Sound.BLOCK_NOTE_BLOCK_BELL
+            Sound.BLOCK_LAVA_POP,
+//            Sound.BLOCK_NOTE_BLOCK_SNARE_DRUM,
+//            Sound.BLOCK_NOTE_BLOCK_PIANO,
+//            Sound.BLOCK_NOTE_BLOCK_PLING,
+//            Sound.BLOCK_NOTE_BLOCK_XYLOPHONE,
+//            Sound.BLOCK_NOTE_BLOCK_BELL
         )
 
         // 音高配置 (0-24)
@@ -66,66 +65,66 @@ class MusicAttackManager(private val plugin: SuperCow) {
     }
 
     fun startMusicAttack(center: Location, target: Entity, isRageMode: Boolean) {
-//        val duration = if (isRageMode) Config.RAGE_DURATION else Config.BASE_DURATION
-//        val rings = if (isRageMode) Config.RAGE_WAVE_RINGS else Config.BASE_WAVE_RINGS
-//
-//        // 播放开始音效
-//        center.world?.playSound(
-//            center,
-//            Sound.BLOCK_NOTE_BLOCK_PLING,
-//            2.0f,
-//            1.0f
-//        )
-//
-//        object : BukkitRunnable() {
-//            private var ticks = 0
-//            private var currentAngle = 0.0
-//            private var melodyIndex = 0
-//
-//            override fun run() {
-//                if (ticks >= duration) {
-//                    cancel()
-//                    return
-//                }
-//
-//                // 为每个圆环生成音符
-//                for (ring in 0 until rings) {
-//                    val radius = (ring + 1) * 2.0
-//                    createMusicRing(center, radius, currentAngle, isRageMode)
-//                }
-//
-//                // 每tick旋转一定角度
-//                currentAngle += 5.0
-//                if (currentAngle >= 360.0) currentAngle = 0.0
-//
-//                // 检测并伤害范围内的实体
-//                val attackRadius = if (isRageMode) Config.RAGE_ATTACK_RADIUS else Config.ATTACK_RADIUS
-//                center.world?.getNearbyEntities(center, attackRadius, attackRadius, attackRadius)
-//                    ?.filterIsInstance<LivingEntity>()
-//                    ?.forEach { entity ->
-//                        if (entity != target) {
-//                            applyMusicEffects(entity, isRageMode)
-//                        }
-//                    }
-//
-//                melodyIndex = (melodyIndex + 1) % Config.NOTE_IDS.size
-//                ticks++
-//            }
-//        }.runTaskTimer(plugin, 0L, 1L)
+        val duration = if (isRageMode) Config.RAGE_DURATION else Config.BASE_DURATION
+        val rings = if (isRageMode) Config.RAGE_WAVE_RINGS else Config.BASE_WAVE_RINGS
+
+        // 播放开始音效
+        center.world?.playSound(
+            center,
+            Sound.BLOCK_LAVA_POP, // 使用 1.12.2 版本支持的枚举值
+            2.0f,
+            1.0f
+        )
+
+        object : BukkitRunnable() {
+            private var ticks = 0
+            private var currentAngle = 0.0
+            private var melodyIndex = 0
+
+            override fun run() {
+                if (ticks >= duration) {
+                    cancel()
+                    return
+                }
+
+                // 为每个圆环生成音符
+                for (ring in 0 until rings) {
+                    val radius = (ring + 1) * 2.0
+                    createMusicRing(center, radius, currentAngle, isRageMode)
+                }
+
+                // 每tick旋转一定角度
+                currentAngle += 5.0
+                if (currentAngle >= 360.0) currentAngle = 0.0
+
+                // 检测并伤害范围内的实体
+                val attackRadius = if (isRageMode) Config.RAGE_ATTACK_RADIUS else Config.ATTACK_RADIUS
+                center.world?.getNearbyEntities(center, attackRadius, attackRadius, attackRadius)
+                    ?.filterIsInstance<LivingEntity>()
+                    ?.forEach { entity ->
+                        if (entity != target) {
+                            applyMusicEffects(entity, isRageMode)
+                        }
+                    }
+
+                melodyIndex = (melodyIndex + 1) % Config.NOTE_IDS.size
+                ticks++
+            }
+        }.runTaskTimer(plugin, 0L, 1L)
     }
 
     private fun createMusicRing(center: Location, radius: Double, baseAngle: Double, isRageMode: Boolean) {
-//        for (i in 0 until Config.NOTES_PER_RING) {
-//            val angle = baseAngle + (i * 360.0 / Config.NOTES_PER_RING)
-//            val radians = Math.toRadians(angle)
-//
-//            val x = center.x + radius * cos(radians)
-//            val z = center.z + radius * sin(radians)
-//
-//            val noteLocation = Location(center.world, x, center.y + 0.5, z)
-//
-//            playMusicNote(noteLocation, isRageMode)
-//        }
+        for (i in 0 until Config.NOTES_PER_RING) {
+            val angle = baseAngle + (i * 360.0 / Config.NOTES_PER_RING)
+            val radians = Math.toRadians(angle)
+
+            val x = center.x + radius * cos(radians)
+            val z = center.z + radius * sin(radians)
+
+            val noteLocation = Location(center.world, x, center.y + 0.5, z)
+
+            playMusicNote(noteLocation, isRageMode)
+        }
     }
 
     private fun playMusicNote(location: Location, isRageMode: Boolean) {
@@ -188,50 +187,50 @@ class MusicAttackManager(private val plugin: SuperCow) {
 
     // 预设音乐主题
     fun playMusicTheme(location: Location, theme: MusicTheme, isRageMode: Boolean) {
-        val (sounds, pitches, interval) = when (theme) {
-            MusicTheme.HAPPY -> Triple(
-                listOf(Sound.BLOCK_NOTE_BLOCK_BELL, Sound.BLOCK_NOTE_BLOCK_CHIME),
-                listOf(1.0f, 1.2f, 1.5f, 1.8f),
-                4L
-            )
-            MusicTheme.SCARY -> Triple(
-                listOf(Sound.BLOCK_NOTE_BLOCK_BASS, Sound.BLOCK_NOTE_BLOCK_DIDGERIDOO),
-                listOf(0.5f, 0.6f, 0.7f, 0.8f),
-                6L
-            )
-            MusicTheme.EPIC -> Triple(
-                listOf(Sound.BLOCK_NOTE_BLOCK_CHIME, Sound.BLOCK_NOTE_BLOCK_BELL),
-                listOf(1.0f, 1.2f, 1.4f, 1.6f, 1.8f, 2.0f),
-                3L
-            )
-            MusicTheme.MYSTERIOUS -> Triple(
-                listOf(Sound.BLOCK_NOTE_BLOCK_FLUTE, Sound.BLOCK_NOTE_BLOCK_HARP),
-                listOf(0.8f, 0.9f, 1.0f, 1.1f),
-                5L
-            )
-        }
-
-        var noteIndex = 0
-        object : BukkitRunnable() {
-            override fun run() {
-                if (noteIndex >= pitches.size * 2) {
-                    cancel()
-                    return
-                }
-
-                val pitch = pitches[noteIndex % pitches.size]
-                val sound = sounds.random()
-
-                location.world?.playSound(
-                    location,
-                    sound,
-                    0.8f,
-                    if (isRageMode) pitch * Random.nextDouble(0.9, 1.1).toFloat() else pitch
-                )
-
-                noteIndex++
-            }
-        }.runTaskTimer(plugin, 0L, interval)
+//        val (sounds, pitches, interval) = when (theme) {
+//            MusicTheme.HAPPY -> Triple(
+//                listOf(Sound.NOTE_BELL, Sound.NOTE_PLING),
+//                listOf(1.0f, 1.2f, 1.5f, 1.8f),
+//                4L
+//            )
+//            MusicTheme.SCARY -> Triple(
+//                listOf(Sound.NOTE_BASS, Sound.NOTE_BASS_DRUM),
+//                listOf(0.5f, 0.6f, 0.7f, 0.8f),
+//                6L
+//            )
+//            MusicTheme.EPIC -> Triple(
+//                listOf(Sound.NOTE_PLING, Sound.NOTE_BELL),
+//                listOf(1.0f, 1.2f, 1.4f, 1.6f, 1.8f, 2.0f),
+//                3L
+//            )
+//            MusicTheme.MYSTERIOUS -> Triple(
+//                listOf(Sound.NOTE_FLUTE, Sound.NOTE_PIANO),
+//                listOf(0.8f, 0.9f, 1.0f, 1.1f),
+//                5L
+//            )
+//        }
+//
+//        var noteIndex = 0
+//        object : BukkitRunnable() {
+//            override fun run() {
+//                if (noteIndex >= pitches.size * 2) {
+//                    cancel()
+//                    return
+//                }
+//
+//                val pitch = pitches[noteIndex % pitches.size]
+//                val sound = sounds.random()
+//
+//                location.world?.playSound(
+//                    location,
+//                    sound,
+//                    0.8f,
+//                    if (isRageMode) pitch * Random.nextDouble(0.9, 1.1).toFloat() else pitch
+//                )
+//
+//                noteIndex++
+//            }
+//        }.runTaskTimer(plugin, 0L, interval)
     }
 
     enum class MusicTheme {

@@ -2,7 +2,6 @@ package net.dabbit.supercow.pathfinding
 
 import net.dabbit.supercow.SuperCow
 import org.bukkit.Bukkit
-import org.bukkit.FluidCollisionMode
 import org.bukkit.Location
 import org.bukkit.entity.Cow
 import org.bukkit.entity.Entity
@@ -12,6 +11,7 @@ import java.util.*
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
+
 class PathfindingManager(private val plugin: SuperCow) {
 
     private val pathfindingTasks = mutableMapOf<UUID, BukkitRunnable>()
@@ -106,35 +106,17 @@ class PathfindingManager(private val plugin: SuperCow) {
     }
 
     private fun hasLineOfSight(from: Location, to: Location): Boolean {
-        try {
-            // Calculate direction vector
-            val direction = to.clone().subtract(from).toVector()
+        val direction = to.clone().subtract(from).toVector()
+        val distance = from.distance(to)
+        val step = 0.2
 
-            // Safety check for zero-length vector
-            if (direction.lengthSquared() < 0.0001) {
-                return true
-            }
-
-            // Normalize direction vector with safety checks
-            val normalizedDirection = try {
-                direction.normalize()
-            } catch (e: IllegalArgumentException) {
+        for (i in 0 until (distance / step).toInt()) {
+            val checkLoc = from.clone().add(direction.clone().multiply(i * step))
+            if (checkLoc.block.type.isSolid) {
                 return false
             }
-
-            // Perform ray trace with validated vectors
-            val rayTrace = from.world?.rayTraceBlocks(
-                from.clone().add(0.0, 1.0, 0.0),
-                normalizedDirection,
-                from.distance(to),
-                FluidCollisionMode.NEVER,
-                true
-            )
-
-            return rayTrace?.hitBlock == null
-        } catch (e: Exception) {
-            return false
         }
+        return true
     }
 
     private fun checkStuckStatus(cow: Cow, currentLoc: Location) {
@@ -197,12 +179,14 @@ class PathfindingManager(private val plugin: SuperCow) {
         val frontBlock = loc.clone().add(moveVector.clone().normalize().multiply(OBSTACLE_CHECK_DISTANCE)).block
         if (frontBlock.type.isSolid) {
             // 寻找替代路径
-            val leftClear = !loc.clone().add(moveVector.clone().rotateAroundY(Math.PI/2)).block.type.isSolid
-            val rightClear = !loc.clone().add(moveVector.clone().rotateAroundY(-Math.PI/2)).block.type.isSolid
+            val leftVector = rotateVectorAroundY(moveVector.clone(), Math.PI / 2)
+            val leftClear = !loc.clone().add(leftVector).block.type.isSolid
+            val rightVector = rotateVectorAroundY(moveVector.clone(), -Math.PI / 2)
+            val rightClear = !loc.clone().add(rightVector).block.type.isSolid
 
             when {
-                leftClear -> adjustedVector.rotateAroundY(Math.PI/4)
-                rightClear -> adjustedVector.rotateAroundY(-Math.PI/4)
+                leftClear -> adjustedVector.setX(leftVector.x).setZ(leftVector.z)
+                rightClear -> adjustedVector.setX(rightVector.x).setZ(rightVector.z)
                 else -> {
                     // 如果两边都被堵住，尝试跳跃或后退
                     if (!loc.clone().add(0.0, 2.0, 0.0).block.type.isSolid) {
@@ -221,45 +205,6 @@ class PathfindingManager(private val plugin: SuperCow) {
 
         return adjustedVector
     }
-
-//    private fun calculateMoveVector(
-//        currentLoc: Location,
-//        targetLoc: Location,
-//        distance: Double,
-//        strafeAngle: Double
-//    ): Vector {
-//        val direction = targetLoc.subtract(currentLoc).toVector().normalize()
-//
-//        // 动态调整速度
-//        val speed = when {
-//            distance > OPTIMAL_COMBAT_DISTANCE * 1.5 -> MAX_SPEED
-//            distance < OPTIMAL_COMBAT_DISTANCE * 0.5 -> -MIN_SPEED
-//            else -> (distance - OPTIMAL_COMBAT_DISTANCE) * 0.1.coerceIn(-MIN_SPEED, MAX_SPEED)
-//        }
-//
-//        // 计算躲避向量
-//        val strafeRad = Math.toRadians(strafeAngle)
-//        val strafeVector = Vector(
-//            cos(strafeRad) * STRAFE_SPEED,
-//            0.0,
-//            sin(strafeRad) * STRAFE_SPEED
-//        )
-//
-//        // 合并移动向量
-//        val moveVector = direction.multiply(speed).add(strafeVector)
-//
-//        // 随机跳跃逻辑
-//        val cowId = UUID.randomUUID() // 这里应该使用实际的牛的UUID
-//        val currentTime = System.currentTimeMillis()
-//        val lastJump = lastJumpTime[cowId] ?: 0L
-//
-//        if (currentTime - lastJump > JUMP_COOLDOWN && Random.nextDouble() < 0.05) { // 5%的概率跳跃
-//            moveVector.y = RANDOM_JUMP_POWER
-//            lastJumpTime[cowId] = currentTime
-//        }
-//
-//        return moveVector
-//    }
 
     private fun calculateMoveVector(
         currentLoc: Location,
@@ -310,16 +255,15 @@ class PathfindingManager(private val plugin: SuperCow) {
             }
         }
 
-        // 随机跳跃逻辑（添加安全校验）
-        //        // 随机跳跃逻辑
-////        val cowId = UUID.randomUUID() // 这里应该使用实际的牛的UUID
-//        val currentTime = System.currentTimeMillis()
-//        val lastJump = lastJumpTime[cowId] ?: 0L
-//
-//        if (currentTime - lastJump > JUMP_COOLDOWN && Random.nextDouble() < 0.05) { // 5%的概率跳跃
-//            moveVector.y = RANDOM_JUMP_POWER
+        // 随机跳跃逻辑
+//        val cowId = cow.uniqueId
+        val currentTime = System.currentTimeMillis()
+        val lastJump =0L
+
+        if (currentTime - lastJump > JUMP_COOLDOWN && Random.nextDouble() < 0.05) { // 5%的概率跳跃
+            moveVector.y = RANDOM_JUMP_POWER
 //            lastJumpTime[cowId] = currentTime
-//        }
+        }
 
         return moveVector
     }
@@ -331,6 +275,14 @@ class PathfindingManager(private val plugin: SuperCow) {
             this.isInfinite() -> if (this > 0) Double.MAX_VALUE else Double.MIN_VALUE
             else -> this.coerceIn(-MAX_SPEED, MAX_SPEED)
         }
+    }
+
+    private fun rotateVectorAroundY(vector: Vector, angle: Double): Vector {
+        val cosAngle = cos(angle)
+        val sinAngle = sin(angle)
+        val newX = vector.x * cosAngle - vector.z * sinAngle
+        val newZ = vector.x * sinAngle + vector.z * cosAngle
+        return Vector(newX, vector.y, newZ)
     }
 
     private fun cleanup(cowId: UUID) {
@@ -345,6 +297,4 @@ class PathfindingManager(private val plugin: SuperCow) {
         cleanup(cow.uniqueId)
         pathfindingTasks[cow.uniqueId]?.cancel()
     }
-
-
 }

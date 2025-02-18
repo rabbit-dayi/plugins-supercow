@@ -335,7 +335,7 @@ class CombatManager(
                         entity.isInvulnerable ||
                         entity is ArmorStand ||
                         entity is Villager ||
-                        entity is WanderingTrader ||
+//                        entity is WanderingTrader ||
                         (entity is Tameable && entity.isTamed))
             }
             else -> false
@@ -603,16 +603,21 @@ class CombatManager(
                 val arrowCount = if (isRageMode) 3 else 1
 
                 repeat(arrowCount) {
-                    val arrow = cow.world.spawnEntity(arrowLocation, EntityType.ARROW) as Arrow
+                    val world: World = cow.world
+                    val arrowLocation: Location = cow.location
+                    val arrow: Arrow = world.spawnEntity(arrowLocation, EntityType.ARROW) as Arrow
 
                     arrow.shooter = cow
                     arrow.setMetadata("supercow_arrow", plugin.fixedMetadataValue())
-                    arrow.damage = if (isRageMode) ArrowConfig.RAGE_DAMAGE else ArrowConfig.BASE_DAMAGE
+//                    firework.setMetadata("shooter", FixedMetadataValue(plugin, shooter.entityId))
+
+                    // 根据是否处于愤怒模式设置箭的伤害（通过药水效果模拟）
+                    val damage = if (isRageMode) ArrowConfig.RAGE_DAMAGE else ArrowConfig.BASE_DAMAGE
+                    // 这里通过药水效果模拟伤害增强，实际伤害可能需要根据情况调整
+//                    arrow.addPotionEffect(PotionEffect(PotionEffectType.INCREASE_DAMAGE, 20, (damage / 2).toInt() - 1))
                     arrow.isCritical = true
 
-
-
-                    val direction = target.location.clone().add(0.0, 0.5, 0.0)
+                    val direction: Vector = target.location.clone().add(0.0, 0.5, 0.0)
                         .subtract(arrowLocation).toVector().normalize()
 
                     val spread = if (isRageMode) ArrowConfig.RAGE_SPREAD else ArrowConfig.ARROW_SPREAD
@@ -625,6 +630,8 @@ class CombatManager(
                             )
                         )
                     }
+
+                    arrow.velocity = direction.multiply(2)
 
 //                    val speed = if (isRageMode) ArrowConfig.RAGE_ARROW_SPEED else ArrowConfig.ARROW_SPEED
 //                    arrow.velocity = direction.multiply(speed)
@@ -698,12 +705,12 @@ class CombatManager(
 
         if (!firework.hasMetadata("supercow_firework")) return
 
-        val shooter = firework.shooter as? Cow ?: return
-        val ownerName = plugin.getActivePets().entries.find { it.value == shooter }?.key ?: return
-        val isRageMode = rageMode[ownerName] ?: false
+//        val shooter = firework.shooter as? Cow ?: return
+//        val ownerName = plugin.getActivePets().entries.find { it.value == shooter }?.key ?: return
+//        val isRageMode = rageMode[ownerName] ?: false
 
         // 设置伤害值
-        event.damage = if (isRageMode) ArrowConfig.RAGE_FIREWORK_DAMAGE else ArrowConfig.FIREWORK_DAMAGE
+        event.damage = ArrowConfig.RAGE_FIREWORK_DAMAGE
     }
 
 

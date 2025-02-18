@@ -30,12 +30,9 @@ class ProjectileManager(private val plugin: SuperCow) {
         const val POTION_GRAVITY = 0.05
         const val SPLASH_RADIUS = 4.0
         val POTION_EFFECTS = mapOf(
-//            PotionEffectType.POISON to Pair(200, 2),      // 中毒 10秒，等级2
             PotionEffectType.WITHER to Pair(20, 1),      // 凋零 5秒，等级1
             PotionEffectType.SLOW to Pair(200, 2),        // 缓慢 5秒，等级2
             PotionEffectType.WEAKNESS to Pair(160, 2),    // 虚弱 8秒，等级2
-//            PotionEffectType.HEAL to Pair(50, 1),   // 反胃 5秒，等级1
-//            PotionEffectType.HEALTH_BOOST to Pair(50, 1),   // 反胃 5秒，等级1
         )
 
         // 火球配置
@@ -169,6 +166,7 @@ class ProjectileManager(private val plugin: SuperCow) {
             Vector(1.0, 0.0, 0.0)
         }
     }
+
     @EventHandler
     fun onFireballHit(event: EntityExplodeEvent) {
         val entity = event.entity
@@ -180,8 +178,11 @@ class ProjectileManager(private val plugin: SuperCow) {
         event.blockList().clear()  // 可选：如果你不想破坏方块
 
         // 创建不带火焰的爆炸效果
+        val loc = entity.location
         entity.world.createExplosion(
-            entity.location,
+            loc.x,
+            loc.y,
+            loc.z,
             entity.yield,
             false,  // 不产生火焰
             true    // 破坏方块（可以根据需要设置为false）
@@ -189,18 +190,6 @@ class ProjectileManager(private val plugin: SuperCow) {
 
         event.isCancelled = true  // 取消原始爆炸
     }
-
-//    private fun calculateInitialDirection(from: Location, to: Location): Vector {
-//        val direction = to.clone().subtract(from).toVector().normalize()
-//
-//        // 添加一些随机偏移
-//        val spread = 0.1
-//        direction.x += Random.nextDouble(-spread, spread)
-//        direction.y += Random.nextDouble(-spread, spread)
-//        direction.z += Random.nextDouble(-spread, spread)
-//
-//        return direction.normalize()
-//    }
 
     private fun playPotionLaunchEffects(location: Location, isRageMode: Boolean) {
         location.world?.apply {
@@ -336,17 +325,21 @@ class ProjectileManager(private val plugin: SuperCow) {
         location.world?.apply {
             if (isRageMode) {
                 createExplosion(
-                    location,
+                    location.x,
+                    location.y,
+                    location.z,
                     Config.RAGE_FIREBALL_EXPLOSION_POWER,
                     true,
                     true
                 )
             } else {
                 createExplosion(
-                    location,
+                    location.x,
+                    location.y,
+                    location.z,
                     Config.FIREBALL_EXPLOSION_POWER,
-                    true,
-                    false
+                    false,
+                    true
                 )
             }
 

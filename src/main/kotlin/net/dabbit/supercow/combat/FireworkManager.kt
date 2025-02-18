@@ -88,21 +88,21 @@ class FireworkManager(private val plugin: SuperCow) {
     }
 
     private fun playLaunchEffects(location: Location, isRageMode: Boolean) {
-        location.world?.apply {
-            playSound(
-                location,
-                Sound.ENTITY_FIREWORK_ROCKET_LAUNCH,
-                1.0f,
-                if (isRageMode) 0.5f else 1.0f
-            )
-            spawnParticle(
-                if (isRageMode) Particle.FLAME else Particle.FIREWORKS_SPARK,
-                location.add(0.0, 1.0, 0.0),
-                10,
-                0.2, 0.2, 0.2,
-                0.05
-            )
-        }
+//        location.world?.apply {
+//            playSound(
+//                location,
+//                Sound.ENTITY_FIREWORK_ROCKET_LAUNCH,
+//                1.0f,
+//                if (isRageMode) 0.5f else 1.0f
+//            )
+//            spawnParticle(
+//                if (isRageMode) Particle.FLAME else Particle.FIREWORKS_SPARK,
+//                location.add(0.0, 1.0, 0.0),
+//                10,
+//                0.2, 0.2, 0.2,
+//                0.05
+//            )
+//        }
     }
 
     private fun startFireworkTracking(firework: Firework, target: Entity, isRageMode: Boolean) {
@@ -139,21 +139,21 @@ class FireworkManager(private val plugin: SuperCow) {
     }
 
     private fun playHitEffects(location: Location, isRageMode: Boolean) {
-        location.world?.apply {
-            playSound(
-                location,
-                Sound.ENTITY_FIREWORK_ROCKET_BLAST,
-                1.0f,
-                if (isRageMode) 0.5f else 1.0f
-            )
-            spawnParticle(
-                if (isRageMode) Particle.EXPLOSION_LARGE else Particle.EXPLOSION_NORMAL,
-                location,
-                5,
-                0.2, 0.2, 0.2,
-                0.05
-            )
-        }
+//        location.world?.apply {
+//            playSound(
+//                location,
+//                Sound.ENTITY_FIREWORK_ROCKET_BLAST,
+//                1.0f,
+//                if (isRageMode) 0.5f else 1.0f
+//            )
+//            spawnParticle(
+//                if (isRageMode) Particle.EXPLOSION_LARGE else Particle.EXPLOSION_NORMAL,
+//                location,
+//                5,
+//                0.2, 0.2, 0.2,
+//                0.05
+//            )
+//        }
     }
 
     private fun updateFireworkTrajectory(firework: Firework, target: Entity, isRageMode: Boolean) {

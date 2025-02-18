@@ -380,8 +380,8 @@ class SuperCow : JavaPlugin(), Listener {
             EntityDamageEvent.DamageCause.FLY_INTO_WALL -> "撞墙而死"
             EntityDamageEvent.DamageCause.HOT_FLOOR -> "被岩浆块烫死"
             EntityDamageEvent.DamageCause.CRAMMING -> "被挤压致死"
-            EntityDamageEvent.DamageCause.DRYOUT -> "缺水而死"
-            EntityDamageEvent.DamageCause.FREEZE -> "被冻死"
+//            EntityDamageEvent.DamageCause.DRYOUT -> "缺水而死"
+//            EntityDamageEvent.DamageCause.FREEZE -> "被冻死"
             EntityDamageEvent.DamageCause.LIGHTNING -> "被闪电劈死"
             else -> "死亡"
         }

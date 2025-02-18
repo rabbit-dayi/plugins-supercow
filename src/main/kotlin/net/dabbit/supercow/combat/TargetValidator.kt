@@ -30,7 +30,7 @@ class TargetValidator {
                         entity.isInvulnerable ||
                         entity is ArmorStand ||
                         entity is Villager ||
-                        entity is WanderingTrader ||
+//                        entity is WanderingTrader ||
                         (entity is Tameable && entity.isTamed) )
             }
             else -> false

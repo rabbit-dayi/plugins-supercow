@@ -1,7 +1,6 @@
 name: supercow
 version: '1.0-SNAPSHOT'
 main: net.dabbit.supercow.SuperCow
-api-version: '1.19'
 authors: [dayi]
 
 commands:
