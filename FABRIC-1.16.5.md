@@ -88,6 +88,38 @@
   击杀计数 +1 / 经验 +10，生命 60/60 并持续回血，宠物死亡后 120 秒自动复活。
 - 日志中除世界自带的 `Couldn't load advancement` 之外无任何 Exception / ERROR。
 
+## 击杀归属：宠物击杀算作玩家击杀
+
+原 Bukkit 插件里宠物的击杀不算玩家击杀：怪物死亡时 `getKillCredit()` 拿到的是宠物牛本身，
+而 `Entity.awardKillScore` 是空实现，于是没有 `killed_by_player` 掉落、没有经验球、
+没有统计与成就。
+
+现在在 `SuperCowMod.onLivingEntityDie`（mixin 注入在 `LivingEntity.die` 的 `HEAD`）里：
+
+- 若死亡实体没有真正的玩家击杀归属，且伤害来源能追溯到某玩家的宠物 / 小牛 / 投射物 / 特殊攻击，
+  先调用 `self.setLastHurtByPlayer(owner)`：
+  - `LivingEntity.createLootContext(hitByPlayer=true, ...)` 会写入 `LootContextParams.LAST_DAMAGE_PLAYER`，
+    于是 16 个带 `minecraft:killed_by_player` 条件的战利品池（僵尸的铁锭/胡萝卜/土豆、蜘蛛眼、
+    凋灵骷髅头、幻翼膜、恼鬼的铁剑等）正常判定；
+  - `dropExperience()` 需要 `lastHurtByPlayerTime > 0`，因此会掉经验球并结算
+    `getExperienceReward(player)`（含抢夺 / 幸运影响）。
+- 随后 `ServerPlayer.awardKillScore(victim, 0, source)`：计分板击杀数（`totalKillCount`、
+  `playerKillCount`）、`MOB_KILLS` 统计、`PLAYER_KILLED_ENTITY` 成就触发器、队伍击杀数
+  全部按玩家击杀处理。
+- 只在 `die()` 阶段写入，战斗过程中绝不设置"最近被玩家攻击"标记，避免怪物仇恨从宠物转到主人；
+  若原版已经判定为玩家击杀（真人打了 ≥1/3 伤害）则整段跳过，不会重复计分。
+- 宠物自身的死亡走 `handlePetDeath`，不进入该逻辑；友伤/自伤拦截不受影响。
+
+A/B 对照（同一只 Lv.1 超级牛、同一批僵尸、忽略不计的世界自带怪物）：
+
+| 版本 | 宠物击杀数 | 玩家 `totalKillCount` | 玩家经验 | 经验球 |
+| --- | --- | --- | --- | --- |
+| 打补丁前 | 9 | 7 → 7（不变） | 5522 → 5522（不变） | 无新增 |
+| 打补丁后 | 6 → 8 | 5 → 7 | 5517 → 5519 | 9 → 10 |
+
+`world/stats/<uuid>.json` 中 `minecraft:mob_kills` 也从 0 增长到 5，
+说明统计 / 成就侧同样走了玩家击杀路径。
+
 ### 已知限制
 
 - 服务器端没有真实玩家，驯服、`/supercow` 的玩家交互类子命令、友伤判定只能在有客户端时验证。

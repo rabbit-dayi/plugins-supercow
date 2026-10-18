@@ -448,6 +448,16 @@ public class SuperCowMod implements ModInitializer {
         return true;
     }
 
+    /**
+     * Vanilla only treats a hit as "player damage" when DamageSource#getEntity() is a Player,
+     * or when a tamed Wolf dealt it (LivingEntity#hurt copies the wolf owner into
+     * lastHurtByPlayer). Our pet is a Cow and its damage source keeps the Cow as the attacker
+     * on purpose: mob AI reads lastHurtByMob, so retargeting to the owner would stop the cow
+     * from tanking. We therefore only copy the owner into lastHurtByPlayer, exactly like the
+     * wolf branch. That field is what vanilla reads for both the XP orbs
+     * (LivingEntity#dropExperience) and the LAST_DAMAGE_PLAYER loot parameter
+     * (LivingEntity#createLootContext), so drops and experience behave like a player kill.
+     */
     /** Called from LivingEntityMixin at the HEAD of LivingEntity#die. */
     // Guard against corpses that stop ticking: a mob whose death animation never runs
     // stays in the world forever (no tickDeath -> never removed) and keeps AI/mob-cap slots.
@@ -475,6 +485,19 @@ public class SuperCowMod implements ModInitializer {
         if (creditOwner == null) {
             return;
         }
+        // Kill credit, done at die() time only so a mob's "recently hit by player" flag is never
+        // set during the fight (that would redirect aggro away from the pet). LivingEntity.die()
+        // reads these fields BEFORE it drops loot / experience, and our mixin runs at HEAD.
+        //   * lastHurtByPlayer -> loot table condition `killed_by_player` + dropExperience()
+        //   * awardKillScore   -> statistics (MOB_KILLS), scoreboard kill counters, advancements
+        if (self.level instanceof ServerLevel && !(self.getKillCredit() instanceof Player)) {
+            ServerPlayer killerPlayer = getPlayer(creditOwner);
+            if (killerPlayer != null) {
+                self.setLastHurtByPlayer(killerPlayer);
+                killerPlayer.awardKillScore(self, 0, source != null ? source : DamageSource.GENERIC);
+            }
+        }
+
         PetData data = petDataByOwner.get(creditOwner);
         if (data == null) {
             return;
