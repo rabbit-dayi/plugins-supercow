@@ -188,6 +188,15 @@ public class SuperCowConfig {
     public double legacyOptimalDistance = 8.0;
     public double legacyFollowStopDistance = 2.0;
 
+    // 转圈飞天（原插件寻路可以把自己送上天）—— 作为小概率触发的技能保留
+    public boolean skySpiralEnabled = true;      // 总开关
+    public double skySpiralChance = 0.03;        // 每次锁定新目标时的触发概率（还要再乘 quirkMode 的掷骰）
+    public int skySpiralDurationTicks = 50;      // 一次螺旋上升持续 2.5 秒
+    public double skySpiralLift = 0.35;          // 每 tick 上升速度（会被原版重力衰减）
+    public double skySpiralMaxHeight = 10.0;     // 相对起点最多升高 10 格（怕摔死）
+    public double skySpiralSpinSpeed = 0.35;     // 每 tick 转多少弧度（转圈的手感）
+    public int skySpiralCooldownTicks = 900;     // 一次飞天之后 45 秒内不再触发
+
     public static SuperCowConfig load(File file) {
         if (file.exists()) {
             try (FileReader reader = new FileReader(file)) {

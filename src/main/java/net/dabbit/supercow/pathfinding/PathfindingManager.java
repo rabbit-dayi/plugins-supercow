@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
 import net.dabbit.supercow.SuperCowMod;
+import net.dabbit.supercow.combat.Quirks;
 import net.dabbit.supercow.config.SuperCowConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
@@ -44,6 +45,8 @@ public class PathfindingManager {
         int lineOfSightTimer;
         boolean cachedLineOfSight = true;
         int jumpCooldown;
+        UUID spiralRolledTarget;
+        long lastSpiralEndTick;
 
         PathState(Mob mob, Vec3 targetPos, Entity targetEntity, double speedModifier, boolean legacy) {
             this.mob = mob;
@@ -58,7 +61,27 @@ public class PathfindingManager {
         }
     }
 
+    /** A "flew into the sky" episode: the original mover could push the pet straight up. */
+    private static class SkySpiral {
+        final PathState state;
+        final long startTick;
+        final long endTick;
+        final double anchorY;
+        final double baseAngle;
+        final boolean standalone;
+
+        SkySpiral(PathState state, long startTick, long endTick, double anchorY, double baseAngle) {
+            this.state = state;
+            this.startTick = startTick;
+            this.endTick = endTick;
+            this.anchorY = anchorY;
+            this.baseAngle = baseAngle;
+            this.standalone = state == null || state.targetEntity == null;
+        }
+    }
+
     private final Map<UUID, PathState> activePaths = new HashMap<>();
+    private final Map<UUID, SkySpiral> spirals = new HashMap<>();
 
     private SuperCowConfig config() {
         SuperCowMod mod = SuperCowMod.getInstance();
@@ -123,11 +146,13 @@ public class PathfindingManager {
         // Stop navigation first so a vanilla path cannot keep pushing after the state is gone.
         mob.getNavigation().stop();
         activePaths.remove(mob.getUUID());
+        spirals.remove(mob.getUUID());
     }
 
     public void stopPathfinding(UUID mobUuid) {
         if (mobUuid != null) {
             activePaths.remove(mobUuid);
+            spirals.remove(mobUuid);
         }
     }
 
@@ -138,6 +163,46 @@ public class PathfindingManager {
             }
         }
         activePaths.clear();
+        spirals.clear();
+    }
+
+    /** Whether the legacy mover owns this mob's movement right now. */
+    public boolean hasActivePath(UUID mobUuid) {
+        return mobUuid != null && activePaths.containsKey(mobUuid);
+    }
+
+    /**
+     * Idle physics for a no-AI pet with no active route. A no-AI mob never runs vanilla gravity,
+     * so a pet left in the air (after a sky spiral, a teleport or a bad spawn) would hover forever
+     * unless the mover keeps applying the hand-rolled fall.
+     */
+    public void applyIdleGravity(Mob mob) {
+        SuperCowConfig cfg = config();
+        if (mob == null || cfg == null || mob.isOnGround()) {
+            return;
+        }
+        applyVelocity(mob, 0.0D, 0.0D, mob.getDeltaMovement().y, cfg.legacyMoveSpeed);
+    }
+
+    /** True while the pet is in the middle of the "spiral into the sky" quirk. */
+    public boolean isSpiraling(UUID mobUuid) {
+        return mobUuid != null && spirals.containsKey(mobUuid);
+    }
+
+    /** /supercow skill sky_spiral: force the quirk so it can be demonstrated on demand. */
+    public boolean forceSkySpiral(Mob mob) {
+        if (mob == null || !mob.isAlive()) {
+            return false;
+        }
+        PathState state = activePaths.get(mob.getUUID());
+        if (state == null) {
+            // A forced spiral does not need a chase target, but the legacy mover (which owns the
+            // spiral tick) only runs for a pet that has a path state.
+            state = new PathState(mob, mob.position(), null, 1.0D, true);
+            activePaths.put(mob.getUUID(), state);
+        }
+        startSkySpiral(mob, state, SuperCowMod.getServerTicksStatic());
+        return true;
     }
 
     public void tick() {
@@ -148,6 +213,7 @@ public class PathfindingManager {
             Mob mob = state.mob;
             if (mob == null || !mob.isAlive() || mob.removed) {
                 it.remove();
+                spirals.remove(entry.getKey());
                 continue;
             }
             state.ticksActive++;
@@ -169,6 +235,35 @@ public class PathfindingManager {
             } else if (!tickVanillaMover(state)) {
                 it.remove();
             }
+        }
+        tickSpirals();
+    }
+
+    /**
+     * Spirals are ticked on their own, not through a path state: combat code may stop the pet's
+     * navigation (or it may have no route at all) and the quirk still has to play out.
+     */
+    private void tickSpirals() {
+        if (spirals.isEmpty()) {
+            return;
+        }
+        SuperCowConfig cfg = config();
+        if (cfg == null) {
+            spirals.clear();
+            return;
+        }
+        long now = SuperCowMod.getServerTicksStatic();
+        for (UUID uuid : new java.util.ArrayList<>(spirals.keySet())) {
+            SkySpiral spiral = spirals.get(uuid);
+            if (spiral == null) {
+                continue;
+            }
+            Mob mob = spiral.state != null ? spiral.state.mob : null;
+            if (mob == null || !mob.isAlive() || mob.removed) {
+                spirals.remove(uuid);
+                continue;
+            }
+            tickSkySpiral(mob, spiral, now, cfg, cfg.legacyMoveSpeed);
         }
     }
 
@@ -232,6 +327,16 @@ public class PathfindingManager {
         double maxSpeed = cfg.legacyMoveSpeed;
         Vec3 pos = mob.position();
         double dist = pos.distanceTo(state.targetPos);
+
+        // Skill: "转圈飞天". The original velocity mover had no vertical clamp worth the name and
+        // could path itself into the sky; here it is a rare, self-terminating episode that owns
+        // the movement for a couple of seconds and then hands control back to gravity.
+        long now = SuperCowMod.getServerTicksStatic();
+        if (spirals.containsKey(mob.getUUID())) {
+            // The spiral is ticked independently (see tick()), so the mover must not fight it.
+            return;
+        }
+        maybeStartSkySpiral(state, cfg, now);
 
         if (dist < 2.0D) {
             // Inside the fight: stop pushing forward but let the strafe wiggle continue.
@@ -318,6 +423,91 @@ public class PathfindingManager {
         }
     }
 
+    // ------------------------------------------------------------------ "flew into the sky" quirk
+
+    /**
+     * Rolls the quirk once per newly locked target: the original mover had no meaningful vertical
+     * clamp, so occasionally the pet simply aimed itself upwards and "pathfound" into the sky.
+     * The roll happens per target (not per tick) so a long fight does not guarantee a launch.
+     */
+    private void maybeStartSkySpiral(PathState state, SuperCowConfig cfg, long now) {
+        if (!cfg.legacyQuirksEnabled || !cfg.skySpiralEnabled || cfg.skySpiralChance <= 0.0D) {
+            return;
+        }
+        Entity target = state.targetEntity;
+        if (target == null) {
+            return;
+        }
+        UUID targetUuid = target.getUUID();
+        if (targetUuid.equals(state.spiralRolledTarget)) {
+            return;
+        }
+        state.spiralRolledTarget = targetUuid;
+        if (now - state.lastSpiralEndTick < cfg.skySpiralCooldownTicks) {
+            return;
+        }
+        if (!Quirks.roll() || RANDOM.nextDouble() >= cfg.skySpiralChance) {
+            return;
+        }
+        startSkySpiral(state.mob, state, now);
+        SuperCowMod mod = SuperCowMod.getInstance();
+        UUID ownerUuid = SuperCowMod.getOwnerUuidFromTags(state.mob);
+        if (mod != null && ownerUuid != null) {
+            net.minecraft.server.level.ServerPlayer owner = mod.getPlayer(ownerUuid);
+            if (owner != null) {
+                owner.sendMessage(new net.minecraft.network.chat.TextComponent(
+                    "§d[超级牛] 糟了，它的寻路把自己送上天了……"), ownerUuid);
+            }
+        }
+    }
+
+    private void startSkySpiral(Mob mob, PathState state, long now) {
+        SuperCowConfig cfg = config();
+        if (mob == null || cfg == null) {
+            return;
+        }
+        int duration = Math.max(10, cfg.skySpiralDurationTicks);
+        spirals.put(mob.getUUID(), new SkySpiral(
+            state,
+            now,
+            now + duration,
+            mob.getY(),
+            RANDOM.nextDouble() * Math.PI * 2.0D
+        ));
+    }
+
+    private void tickSkySpiral(Mob mob, SkySpiral spiral, long now, SuperCowConfig cfg, double maxSpeed) {
+        double maxHeight = Math.max(1.0D, cfg.skySpiralMaxHeight);
+        double height = mob.getY() - spiral.anchorY;
+        if (now >= spiral.endTick || height >= maxHeight) {
+            endSkySpiral(spiral, now);
+            return;
+        }
+        double angle = spiral.baseAngle + (now - spiral.startTick) * cfg.skySpiralSpinSpeed;
+        double speed = maxSpeed * 0.8D;
+        double lift = cfg.skySpiralLift * Mth.clamp(1.0D - height / maxHeight, 0.2D, 1.0D);
+        applyVelocity(mob, Math.cos(angle) * speed, Math.sin(angle) * speed, lift, maxSpeed);
+    }
+
+    private void endSkySpiral(SkySpiral spiral, long now) {
+        Mob mob = spiral.state != null ? spiral.state.mob : null;
+        if (spiral.state != null) {
+            spiral.state.lastSpiralEndTick = now;
+            spiral.state.stuckTicks = 0;
+            if (mob != null) {
+                spiral.state.lastPos = mob.position();
+            }
+        }
+        if (mob != null) {
+            spirals.remove(mob.getUUID());
+            if (spiral.standalone) {
+                // No chase target existed: drop the throw-away path state so the pet is not left
+                // with a fake "stay still" route after landing.
+                activePaths.remove(mob.getUUID());
+            }
+        }
+    }
+
     private void applyVelocity(Mob mob, double vx, double vz, double vy, double maxSpeed) {
         double limit = Math.max(0.05D, maxSpeed * 1.2D);
         double dx = Mth.clamp(finite(vx), -limit, limit);
@@ -331,8 +521,10 @@ public class PathfindingManager {
         // neither walks nor falls. The "abstract" mover therefore writes the vector and displaces
         // the entity itself, including a hand-rolled gravity/step-up so it can walk on terrain.
         if (!mob.isOnGround()) {
-            double fall = Math.min(dy, 0.0D) - 0.08D;
-            dy = Math.max(fall, -0.6D);
+            // Positive vertical motion (jump push, sky spiral lift) is kept but decays, so an
+            // upward push can actually leave the ground without the pet hovering forever.
+            double gravity = dy > 0.0D ? 0.05D : 0.08D;
+            dy = Math.max(dy - gravity, -0.6D);
         } else if (dy < 0.0D) {
             dy = 0.0D;
         }

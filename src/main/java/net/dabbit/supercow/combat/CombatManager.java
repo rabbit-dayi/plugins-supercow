@@ -545,6 +545,11 @@ public class CombatManager {
         if (pet == null || !pet.isAlive()) {
             return false;
         }
+        // Movement skills do not need a target: they act on the pet itself.
+        if ("sky_spiral".equalsIgnoreCase(skillName) || "spiral".equalsIgnoreCase(skillName)
+            || "sky".equalsIgnoreCase(skillName) || "fly".equalsIgnoreCase(skillName)) {
+            return mod.getPathfindingManager() != null && mod.getPathfindingManager().forceSkySpiral(pet);
+        }
         LivingEntity target = getCurrentTarget(ownerUuid);
         if (target == null || !target.isAlive() || target.removed) {
             target = owner != null ? mod.findNearestTarget(owner, pet) : null;

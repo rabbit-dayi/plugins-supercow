@@ -91,7 +91,7 @@
 - `arrowHealAmount`：原插件箭矢配置里的 `HEAL_AMOUNT = 2.5`，每轮箭雨后宠物自愈。
 - `musicInvertedTargeting`：原版音波"打到所有人，除了目标"，保留为只对非目标上 debuff。
 - `musicZeroKnockback`：原版 `entity.location - entity.location` 的零向量击退（NaN），保留为"不击退"。
-- `eggHitsAnyNonFriendly`：原版鸡蛋只打玩家（含主人）；移植版改为只打非友方，不再误伤主人。
+- `eggQuirkPlayersOnly`：原版鸡蛋只打玩家（含主人）；BUG 版复刻这一条，修复版打所有非友方（不误伤主人）。
 - `summon` 自动释放不消耗干草块（原版 `consumeHayBale` 首行 `return true` 的死代码），
   只有玩家手动 `/supercow attack summon` 才扣干草块与冷却。
 
@@ -99,6 +99,12 @@
 速度向量：距离分档给基础速度、视线被挡时按 45° 试探 8 个方向、以 +10°/tick（10% 概率 ±45°）的
 漂移角度永远侧移（所以它会绕圈、贴墙、走 Z 字）、前方有方块就跳、还有 3% 概率的无意义小跳。
 移动器自己调用 `move()` 并维护重力，因此 noAI 的牛也能正常走路、上台阶、掉落。
+
+**`sky_spiral` 转圈飞天**（原插件"能把自己寻路到天上"的 BUG，保留为技能）：
+锁定一个新目标的瞬间按 `skySpiralChance`（默认 3%）掷一次骰，中招后宠物会一边绕圈一边往天上爬，
+持续 `skySpiralDurationTicks`（50 tick）或爬到 `skySpiralMaxHeight`（10 格）为止，然后自动掉回地面
+（不摔伤、不会飘在空中不落）。触发时主人会收到 `§d[超级牛] 糟了，它的寻路把自己送上天了……`。
+冷却 `skySpiralCooldownTicks`（900 tick），同一个目标只掷一次骰。强制演示：`/supercow skill sky_spiral`。
 
 **技能清理保证**（用户要求：不能有"技能放完还留在世界里的东西"）：
 
@@ -141,7 +147,11 @@
 - **召唤**：掷中 BUG 版时，技能触发的召唤不消耗干草块、不走冷却（原版 `consumeHayBale` 首行 `return true`）。
   手动 `/supercow attack summon` 无论什么模式都照常扣干草块。
 
-`/supercow skills` 会显示当前风格，例如 `风格：mixed 50%`。
+注意 `sky_spiral`（转圈飞天）不受"每次释放掷骰"影响，它用的是同一套 `Quirks.roll()`，
+但掷骰时机是"锁定新目标"、每个目标只掷一次：`safe` 永不触发，`mixed` 50% × 3%，
+`chaos` 3%。想调概率就改 `skySpiralChance` / `skySpiralCooldownTicks`。
+
+`/supercow skills` 会显示当前风格，例如 `风格：mixed 50%`，以及转圈飞天的当前触发概率。
 
 ## 数值（全部按"保守"取向下调）
 

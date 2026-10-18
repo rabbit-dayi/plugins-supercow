@@ -707,11 +707,41 @@ public class SuperCowMod implements ModInitializer {
         SpecialAttackManagers.tickAll();
         SkillCleanup.tick();
         pathfindingManager.tick();
+        // A no-AI pet does not fall by itself: when it is airborne with no active route the
+        // legacy mover's gravity has to be applied here, otherwise it hovers where it was left.
+        for (UUID ownerUuid : new ArrayList<>(activePetByOwner.keySet())) {
+            Cow flying = getActivePet(ownerUuid);
+            if (flying != null && flying.isAlive() && !flying.isOnGround()
+                && !pathfindingManager.hasActivePath(flying.getUUID())
+                && !pathfindingManager.isSpiraling(flying.getUUID())) {
+                pathfindingManager.applyIdleGravity(flying);
+            }
+        }
         if (serverTicks % 40 == 0) {
             // Safety net: anything left behind with the supercow_skill tag that the registry no
             // longer knows about is removed, so a skill can never leak an entity permanently.
             for (ServerLevel level : srv.getAllLevels()) {
                 SkillCleanup.sweep(level);
+            }
+        }
+
+        if (serverTicks % 100 == 0) {
+            // The pet is a normal world entity, so the world save keeps a copy of it. On the next
+            // start a fresh pet is spawned from supercow-pets.json and the saved one becomes a
+            // duplicate that hovers where it was left (no-AI mobs never fall). Drop any tagged pet
+            // that is not the currently active one.
+            for (ServerLevel level : srv.getAllLevels()) {
+                for (Entity entity : level.getAllEntities()) {
+                    if (!(entity instanceof Cow) || !entity.getTags().contains("supercow_pet")) {
+                        continue;
+                    }
+                    UUID ownerUuid = getOwnerUuidFromTags(entity);
+                    if (ownerUuid != null && activePetByOwner.get(ownerUuid) == entity) {
+                        continue;
+                    }
+                    ownerByPetEntity.remove(entity.getUUID());
+                    entity.remove();
+                }
             }
         }
 
@@ -943,7 +973,8 @@ public class SuperCowMod implements ModInitializer {
                     .then(Commands.literal("exploding_cow").executes(ctx -> forceSkill(ctx.getSource(), "exploding_cow")))
                     .then(Commands.literal("summon").executes(ctx -> forceSkill(ctx.getSource(), "summon")))
                     .then(Commands.literal("summon_parrots").executes(ctx -> forceSkill(ctx.getSource(), "summon_parrots")))
-                    .then(Commands.literal("summon_rabbits").executes(ctx -> forceSkill(ctx.getSource(), "summon_rabbits")))));
+                    .then(Commands.literal("summon_rabbits").executes(ctx -> forceSkill(ctx.getSource(), "summon_rabbits")))
+                    .then(Commands.literal("sky_spiral").executes(ctx -> forceSkill(ctx.getSource(), "sky_spiral")))));
         }
 
         private static ServerPlayer player(CommandSourceStack src) {
@@ -980,6 +1011,9 @@ public class SuperCowMod implements ModInitializer {
             p.sendMessage(new TextComponent("\u00A7earrow \u00A77\u7BAD\u77E2 / \u00A7efireball \u00A77\u706B\u7403 / \u00A7epotion \u00A77\u836F\u6C34 / \u00A7efirework \u00A77\u70DF\u82B1"), owner);
             p.sendMessage(new TextComponent("\u00A7echicken \u00A77\u8F70\u70B8\u9E21 / \u00A7emusic \u00A77\u97F3\u4E50 / \u00A7eexploding_cow \u00A77\u81EA\u7206\u725B"), owner);
             p.sendMessage(new TextComponent("\u00A7esummon \u00A77\u62A4\u536B\u5C0F\u725B / \u00A7esummon_parrots \u00A77\u9E66\u9E49 / \u00A7esummon_rabbits \u00A77\u5154\u5B50"), owner);
+            p.sendMessage(new TextComponent("\u00A77\u8F6C\u5708\u98DE\u5929\uFF1A\u00A7f\u8FFD\u51FB\u65F6 \u00A7e"
+                + String.format("%.0f%%", mod().getConfig().skySpiralChance * 100.0D)
+                + " \u00A77\u89E6\u53D1 \u00A78(\u5F3A\u5236\uFF1A/supercow skill sky_spiral)"), owner);
             p.sendMessage(new TextComponent("\u00A77\u98CE\u683C\uFF1A\u00A7f" + net.dabbit.supercow.combat.Quirks.describe()
                 + " \u00A77(safe=\u5168\u4FEE\u590D\u7248 / mixed=\u6DF7\u5408 / chaos=\u5168BUG\u7248)"), owner);
             p.sendMessage(new TextComponent("\u00A77\u6D3B\u52A8\u6280\u80FD\u5B9E\u4F53\uFF1A\u00A7f" + SkillCleanup.countForOwner(owner)
