@@ -42,6 +42,23 @@ import java.util.UUID;
 public final class PetGui {
 
     public static final int SIZE = 54;
+    /**
+     * The carried stack the client believes it holds after the click currently being processed.
+     * Published by {@code ServerGamePacketListenerMixin} right before vanilla handles the packet.
+     */
+    private static final ThreadLocal<ItemStack> PREDICTED_CARRIED = new ThreadLocal<ItemStack>();
+
+    public static void setPredictedCarried(ItemStack stack) {
+        PREDICTED_CARRIED.set(stack);
+    }
+
+    private static ItemStack takePredictedCarried(ServerPlayer player) {
+        ItemStack predicted = PREDICTED_CARRIED.get();
+        PREDICTED_CARRIED.remove();
+        return predicted != null ? predicted : player.inventory.getCarried();
+    }
+
+
     private static final int SKILL_START = 9;
     private static final int SLOT_MODE = 4;
     private static final int SLOT_SUMMON_MODE = 5;
@@ -108,6 +125,21 @@ public final class PetGui {
          * returned, so vanilla's prediction check (ItemStack.matches against the packet) fails
          * and the client gets a full resync from us instead of inventing items.
          */
+        /**
+         * Every click is accepted rather than rejected.
+         *
+         * <p>1.16.5's ServerGamePacketListenerImpl.handleContainerClick compares the stack we
+         * return with the stack the client predicted. On a mismatch it sends a "rejected" ack,
+         * calls setSynched(player, false) and re-pushes the window. Real clients react badly to
+         * that while the mouse button is still held: the cursor prediction is re-applied locally,
+         * the icon visually lands in the player inventory, and (when the rejection races the
+         * auto-close below) the same window stops accepting clicks entirely.</p>
+         *
+         * <p>So we mirror the client's prediction exactly: the carried stack the client sent back
+         * is what we return. The client prediction for "pick up an icon" is therefore confirmed,
+         * the panel content is re-pushed immediately afterwards (which resets the cursor and every
+         * slot), and no desync/synch churn ever happens.</p>
+         */
         @Override
         public ItemStack clicked(int slotId, int button, ClickType type, Player player) {
             if (!(player instanceof ServerPlayer)) {
@@ -117,28 +149,21 @@ public final class PetGui {
             if (sp.containerMenu != this) {
                 return sp.inventory.getCarried();
             }
+            ItemStack predicted = takePredictedCarried(sp);
             if (slotId >= 0 && slotId < SIZE) {
                 handleClick(slotId, button, sp);
                 if (sp.containerMenu == this) {
                     refresh();
                     pushContents(sp);
                 }
-            } else if (slotId == -999) {
-                // Clicking outside the window would drop whatever the client thinks it carries.
-                refresh();
+                return predicted;
+            }
+            // Player-inventory half and clicks outside the window: nothing may move, so the
+            // prediction is confirmed and the client is resynced from the authoritative stacks.
+            if (sp.containerMenu == this) {
                 pushContents(sp);
             }
-            // Everything else (the player inventory half) is deliberately ignored: the panel is
-            // read-only, and the client's prediction gets corrected by the resync below.
-            // Clicks in the player inventory half (SIZE..SIZE+35) are ignored: nothing may move.
-            // Returning the unchanged carried stack makes vanilla treat the click as "rejected"
-            // and it resyncs the whole container + the cursor for us - which is exactly what we
-            // want, because the client had predicted the icon moving into its inventory.
-            // 1.16.5 marks a menu "unsynched" on that path (AbstractContainerMenu.setSynched(p,
-            // false)) and then DROPS every following click, so we re-arm it here; otherwise the
-            // panel would only ever accept one single click.
-            this.setSynched(sp, true);
-            return sp.inventory.getCarried();
+            return predicted;
         }
 
         @Override
@@ -255,12 +280,33 @@ public final class PetGui {
             return petEntity(viewer, petUuid);
         }
 
-        // 1.16.5 only has ServerLevel#getEntity(UUID); Level#getEntity takes a numeric id.
+        /**
+         * 1.16.5 only has ServerLevel#getEntity(UUID), which returns null for an unloaded chunk.
+         * A null here used to make stillValid() flap, and ServerPlayer.tick() reacts to that by
+         * calling closeContainer(): the server closes the menu and sends a container-close packet,
+         * but a real client whose mouse is still "holding" the window keeps its chest open with a
+         * stale window id, so every following click was silently dropped ("所有东西都点不了").
+         * The mod's own registry is authoritative, so fall back to it instead of flapping.
+         */
         private static Entity petEntity(Player player, UUID petUuid) {
             if (player == null || !(player.level instanceof ServerLevel)) {
                 return null;
             }
-            return ((ServerLevel) player.level).getEntity(petUuid);
+            Entity byId = ((ServerLevel) player.level).getEntity(petUuid);
+            if (byId != null) {
+                return byId;
+            }
+            SuperCowMod mod = SuperCowMod.getInstance();
+            if (mod == null) {
+                return null;
+            }
+            for (UUID owner : new ArrayList<UUID>(mod.getPetOwnerUuids())) {
+                Cow pet = mod.getActivePet(owner);
+                if (pet != null && petUuid.equals(pet.getUUID())) {
+                    return pet;
+                }
+            }
+            return null;
         }
 
         private void clear() {
@@ -349,7 +395,7 @@ public final class PetGui {
                     tell(player, "§c宠物不在身边，无法治疗");
                 }
             } else if (slot == SLOT_RECALL) {
-                player.closeContainer();
+                closeNextTick(player);
                 mod.recallPet(player);
             } else if (slot == SLOT_CALL) {
                 Entity entity = petEntity(player, petUuid);
@@ -367,10 +413,35 @@ public final class PetGui {
                 configDirty = true;
                 tell(player, on ? "§a已开启全部技能" : "§c已关闭全部技能");
             } else if (slot == SLOT_CLOSE) {
-                player.closeContainer();
+                closeNextTick(player);
             } else {
                 tell(player, "§7这一格只是装饰");
             }
+        }
+
+        /**
+         * Closes the menu on the next server tick.
+         *
+         * <p>Closing from inside {@code clicked()} is too early: vanilla has not yet sent the
+         * container-ack for this click, so the client is left with a transaction it never hears
+         * back about ("Server didn't respond to transaction"), and a real client keeps its ghost
+         * cursor item. Letting the tick finish first means the ack (and our final content push)
+         * go out, and only then does the close packet follow.</p>
+         */
+        private void closeNextTick(final ServerPlayer player) {
+            final net.minecraft.server.MinecraftServer server = player.server;
+            if (server == null) {
+                player.closeContainer();
+                return;
+            }
+            server.execute(new Runnable() {
+                @Override
+                public void run() {
+                    if (player.containerMenu == PetMenu.this) {
+                        player.closeContainer();
+                    }
+                }
+            });
         }
 
         /** Action bar feedback so every click visibly does something. */

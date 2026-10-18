@@ -179,6 +179,11 @@ public class SuperCowMod implements ModInitializer {
         return petDataByOwner.get(ownerUuid);
     }
 
+    /** Owner UUIDs that currently have pet data (used by the GUI to resolve a pet robustly). */
+    public java.util.Set<UUID> getPetOwnerUuids() {
+        return new java.util.HashSet<>(petDataByOwner.keySet());
+    }
+
     public Cow getActivePet(UUID ownerUuid) {
         Cow cow = activePetByOwner.get(ownerUuid);
         if (cow != null && (!cow.isAlive() || cow.removed)) {

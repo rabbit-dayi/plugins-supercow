@@ -1,6 +1,8 @@
 package net.dabbit.supercow.mixin;
 
 import net.dabbit.supercow.SuperCowMod;
+import net.dabbit.supercow.gui.PetGui;
+import net.minecraft.network.protocol.game.ServerboundContainerClickPacket;
 import net.minecraft.network.protocol.game.ServerboundInteractPacket;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
@@ -26,6 +28,20 @@ public class ServerGamePacketListenerMixin {
 
     @Shadow
     private ServerPlayer player;
+
+    /**
+     * Publishes the client's predicted carried stack for the click that is about to be handled.
+     *
+     * <p>1.16.5 validates a click by comparing {@code menu.clicked(...)}'s return value with the
+     * stack the client says it is holding afterwards. A mismatch triggers a rejected ack, a
+     * re-push of the whole window and {@code setSynched(player, false)}; a real client answering a
+     * rejection while the mouse is still down ends up with a ghost cursor item and a window that
+     * ignores every following click. Returning the prediction verbatim keeps the ack positive.</p>
+     */
+    @Inject(method = "handleContainerClick", at = @At("HEAD"))
+    private void supercow$rememberPredictedCarried(ServerboundContainerClickPacket packet, CallbackInfo ci) {
+        PetGui.setPredictedCarried(packet.getItem());
+    }
 
     @Inject(method = "handleInteract", at = @At("HEAD"), cancellable = true)
     private void supercow$handleInteract(ServerboundInteractPacket packet, CallbackInfo ci) {
