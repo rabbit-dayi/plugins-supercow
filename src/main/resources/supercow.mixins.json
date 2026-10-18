@@ -1,0 +1,11 @@
+{
+  "required": true,
+  "package": "net.dabbit.supercow.mixin",
+  "compatibilityLevel": "JAVA_8",
+  "mixins": [
+    "LivingEntityMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

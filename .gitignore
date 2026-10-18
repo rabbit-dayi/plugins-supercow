@@ -27,3 +27,13 @@ replay_pid*
 .kotlin/
 
 tmp.txt
+# Gradle / Fabric Loom build output
+build/
+.gradle/
+run/
+.idea/
+*.iml
+dependency-reduced-pom.xml
+
+# Maven build output
+target/

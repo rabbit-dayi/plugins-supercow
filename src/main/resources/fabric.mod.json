@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "supercow",
+  "version": "${version}",
+  "name": "SuperCow",
+  "description": "SuperCow pet and combat system for Minecraft 1.16.5 Fabric (conservative balance & bug-fixed edition).",
+  "authors": [
+    "dabbit"
+  ],
+  "contact": {
+    "sources": "https://github.com/rabbit-dayi/plugins-supercow"
+  },
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "net.dabbit.supercow.SuperCowMod"
+    ]
+  },
+  "mixins": [
+    "supercow.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.14.0",
+    "minecraft": "~1.16.5",
+    "java": ">=8",
+    "fabric": "*"
+  }
+}
