@@ -12,6 +12,7 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.network.chat.TextComponent;
 import net.minecraft.network.protocol.game.ClientboundContainerSetContentPacket;
+import net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.SimpleContainer;
@@ -51,6 +52,9 @@ public final class PetGui {
     private static final int SLOT_ALL_ON = 39;
     private static final int SLOT_ALL_OFF = 40;
     private static final int SLOT_CLOSE = 53;
+    private static final String[] INFO_KEYS = {
+        "宠物信息", "技能开关数量", "宠物状态", "使用说明"
+    };
 
     private PetGui() {
     }
@@ -119,7 +123,13 @@ public final class PetGui {
                     refresh();
                     pushContents(sp);
                 }
+            } else if (slotId == -999) {
+                // Clicking outside the window would drop whatever the client thinks it carries.
+                refresh();
+                pushContents(sp);
             }
+            // Everything else (the player inventory half) is deliberately ignored: the panel is
+            // read-only, and the client's prediction gets corrected by the resync below.
             // Clicks in the player inventory half (SIZE..SIZE+35) are ignored: nothing may move.
             // Returning the unchanged carried stack makes vanilla treat the click as "rejected"
             // and it resyncs the whole container + the cursor for us - which is exactly what we
@@ -143,6 +153,18 @@ public final class PetGui {
         // ------------------------------------------------------------ rendering
 
         private void refresh() {
+            // SimpleContainer notifies the menu through slotsChanged/broadcastChanges for every
+            // setItem. Rebuilding 54 slots would otherwise push half-baked packets to the client
+            // (icons flickering / appearing one click late), so writes are made silent and the
+            // finished panel is pushed once at the end.
+            try {
+                renderPanel();
+            } finally {
+                // nothing to re-arm: the panel content is pushed explicitly by pushContents()
+            }
+        }
+
+        private void renderPanel() {
             SuperCowMod mod = SuperCowMod.getInstance();
             SuperCowConfig cfg = mod.getConfig();
             PetData data = mod.getPetData(ownerUuid);
@@ -251,8 +273,7 @@ public final class PetGui {
                 boolean now = !cfg.isSkillEnabled(skill.id);
                 cfg.setSkillEnabled(skill.id, now);
                 configDirty = true;
-                player.sendMessage(new TextComponent("§e[超级牛] 技能 §f" + skill.display + " §e已"
-                    + (now ? "§a开启" : "§c关闭")), ownerUuid);
+                tell(player, "技能 §f" + skill.display + (now ? " §a开启" : " §c关闭"));
                 return;
             }
             if (data == null) {
@@ -262,16 +283,19 @@ public final class PetGui {
                 PetMode next = nextMode(PetMode.fromString(data.combatMode));
                 data.combatMode = next.name();
                 mod.getCombatManager().setPetMode(ownerUuid, next);
+                tell(player, "§b战斗模式 §f" + next.getDisplayName());
             } else if (slot == SLOT_SUMMON_MODE) {
                 SummonMode next = nextSummonMode(SummonMode.fromString(data.summonMode));
                 data.summonMode = next.name();
                 mod.getSummonManager().setSummonMode(ownerUuid, next);
+                tell(player, "§b召唤模式 §f" + next.getDisplayName());
             } else if (slot == SLOT_QUIRK) {
                 String mode = cfg.quirkMode != null ? cfg.quirkMode.toLowerCase() : "mixed";
                 String next = mode.startsWith("s") ? "mixed" : (mode.startsWith("m") ? "chaos" : "safe");
                 cfg.legacyQuirksEnabled = true;
                 cfg.quirkMode = next;
                 configDirty = true;
+                tell(player, "§d技能风格 §f" + net.dabbit.supercow.combat.Quirks.describe());
             } else if (slot == SLOT_HEAL) {
                 Entity entity = petEntity(player, petUuid);
                 if (entity instanceof Cow) {
@@ -279,7 +303,9 @@ public final class PetGui {
                     pet.setHealth(pet.getMaxHealth());
                     data.currentHealth = pet.getHealth();
                     data.maxHealth = pet.getMaxHealth();
-                    player.sendMessage(new TextComponent("§a[超级牛] 宠物已治疗。"), ownerUuid);
+                    tell(player, "§a已治疗宠物 §f" + String.format("%.1f", pet.getMaxHealth()) + " HP");
+                } else {
+                    tell(player, "§c宠物不在身边，无法治疗");
                 }
             } else if (slot == SLOT_RECALL) {
                 player.closeContainer();
@@ -288,6 +314,9 @@ public final class PetGui {
                 Entity entity = petEntity(player, petUuid);
                 if (entity instanceof Cow) {
                     entity.teleportTo(player.getX(), player.getY(), player.getZ());
+                    tell(player, "§a宠物已传送到你脚下");
+                } else {
+                    tell(player, "§c宠物不在这个世界");
                 }
             } else if (slot == SLOT_ALL_ON || slot == SLOT_ALL_OFF) {
                 boolean on = slot == SLOT_ALL_ON;
@@ -295,10 +324,20 @@ public final class PetGui {
                     cfg.setSkillEnabled(skill.id, on);
                 }
                 configDirty = true;
-                player.sendMessage(new TextComponent("§e[超级牛] 已" + (on ? "§a开启" : "§c关闭") + " §e全部技能。"), ownerUuid);
+                tell(player, on ? "§a已开启全部技能" : "§c已关闭全部技能");
             } else if (slot == SLOT_CLOSE) {
                 player.closeContainer();
+            } else if (slot <= 3) {
+                // Info icons: nothing to run, but the click must not feel dead.
+                tell(player, "§7" + INFO_KEYS[slot]);
+            } else {
+                tell(player, "§7这一格只是装饰");
             }
+        }
+
+        /** Action bar feedback so every click visibly does something. */
+        private void tell(ServerPlayer player, String text) {
+            player.displayClientMessage(new TextComponent(text), true);
         }
 
         private static PetMode nextMode(PetMode mode) {
@@ -326,6 +365,9 @@ public final class PetGui {
                 items.set(SIZE + 27 + i, inv.getItem(i));
             }
             player.connection.send(new ClientboundContainerSetContentPacket(this.containerId, items));
+            // Slot -1 = the cursor stack; a stale ghost item there would otherwise survive until
+            // the next click.
+            player.connection.send(new ClientboundContainerSetSlotPacket(-1, -1, player.inventory.getCarried()));
         }
 
         // ------------------------------------------------------------ item helpers
