@@ -110,6 +110,39 @@
   一次性清空该主人的全部残留。
 - 兜底：每 40 tick 对每个维度做一次 `SkillCleanup.sweep()`，把"带 tag 但登记表里没有"的实体删掉。
 
+## 技能风格：修复版 / 混合 / 原版BUG版（`quirkMode`）
+
+这次更新之前的逻辑（所有技能都按"修好"的方式生效）被完整保留，只是不再是唯一选项。
+每次释放技能时，`combat/Quirks.roll()` 决定这一发走"修复版"还是"原版BUG版"：
+
+| 模式 | 行为 |
+| --- | --- |
+| `safe` | 全部技能使用修复版（= 上一次更新的手感，稳定、不误伤、召唤扣干草） |
+| `mixed`（默认） | 每次释放按 `quirkChaosChance`（默认 50%）掷骰，两版都会出现 |
+| `chaos` | 全部技能使用原版 BUG 版（特色拉满） |
+
+切换命令（权限 2，写入 `config/supercow-config.json`）：
+
+```
+/supercow quirk            # 查看当前风格
+/supercow quirk safe       # 全修复版
+/supercow quirk mixed      # 混合（默认 50%）
+/supercow quirk chaos      # 全 BUG 版
+/supercow quirk off        # 等价于 safe（legacyQuirksEnabled=false）
+```
+
+受影响的每个技能（都是"发"级别的掷骰，同一发技能内部行为一致）：
+
+- **箭矢**：掷中 BUG 版时，一轮箭雨之后宠物自愈 `arrowHealAmount`。
+- **自爆牛**：掷中 BUG 版时，有 `explodingCowPotionBugChance` 的概率丢成药水（原版调错方法的复刻）。
+- **音波**：掷中 BUG 版时，debuff 只给"非主目标"（`musicInvertedTargeting`），并且不击退（`musicZeroKnockback`）。
+- **轰炸鸡**：掷中 BUG 版时，鸡蛋只伤害玩家（`eggQuirkPlayersOnly`），对怪物无效；主人依然被仇恨保护筛掉，
+  所以实际只会误伤旁边的其他玩家——`/supercow quirk chaos` 时别站在队友旁边。
+- **召唤**：掷中 BUG 版时，技能触发的召唤不消耗干草块、不走冷却（原版 `consumeHayBale` 首行 `return true`）。
+  手动 `/supercow attack summon` 无论什么模式都照常扣干草块。
+
+`/supercow skills` 会显示当前风格，例如 `风格：mixed 50%`。
+
 ## 数值（全部按"保守"取向下调）
 
 | 项 | 原插件 | 本移植版 |

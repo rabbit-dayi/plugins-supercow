@@ -838,6 +838,19 @@ public class SuperCowMod implements ModInitializer {
         config = SuperCowConfig.load(new File(configDir(), "supercow-config.json"));
     }
 
+    /** Writes the in-memory config back to config/supercow-config.json. */
+    public void saveConfigFile() {
+        try {
+            File file = new File(configDir(), "supercow-config.json");
+            if (!file.getParentFile().exists()) {
+                file.getParentFile().mkdirs();
+            }
+            config.save(file);
+        } catch (Exception e) {
+            System.out.println("[SuperCow] 配置保存失败: " + e);
+        }
+    }
+
     // ---------------------------------------------------------------- helpers
 
     public ServerPlayer getPlayer(UUID uuid) {
@@ -912,6 +925,13 @@ public class SuperCowMod implements ModInitializer {
                     .then(Commands.literal("music").executes(ctx -> manualAttack(ctx.getSource(), "music")))
                     .then(Commands.literal("exploding_cow").executes(ctx -> manualAttack(ctx.getSource(), "exploding_cow")))
                     .then(Commands.literal("summon").executes(ctx -> manualAttack(ctx.getSource(), "summon"))))
+                .then(Commands.literal("quirk").requires(src -> src.hasPermission(2))
+                    .executes(ctx -> quirkInfo(ctx.getSource()))
+                    .then(Commands.literal("safe").executes(ctx -> setQuirkMode(ctx.getSource(), "safe")))
+                    .then(Commands.literal("mixed").executes(ctx -> setQuirkMode(ctx.getSource(), "mixed")))
+                    .then(Commands.literal("chaos").executes(ctx -> setQuirkMode(ctx.getSource(), "chaos")))
+                    .then(Commands.literal("on").executes(ctx -> setQuirkFlag(ctx.getSource(), true)))
+                    .then(Commands.literal("off").executes(ctx -> setQuirkFlag(ctx.getSource(), false))))
                 .then(Commands.literal("skills").executes(ctx -> skills(ctx.getSource())))
                 .then(Commands.literal("skill").requires(src -> src.hasPermission(2))
                     .then(Commands.literal("arrow").executes(ctx -> forceSkill(ctx.getSource(), "arrow")))
@@ -946,6 +966,7 @@ public class SuperCowMod implements ModInitializer {
             src.sendSuccess(new TextComponent("\u00A7e/supercow skills \u00A77- \u5217\u51FA\u6280\u80FD\u8868\u4E0E\u6D3B\u52A8\u6280\u80FD\u5B9E\u4F53\u6570"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow skill <name> \u00A77- \u5F3A\u5236\u91CA\u653E\u4E00\u4E2A\u6280\u80FD (\u9700\u6743\u96502)"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow heal \u00A77- \u6CBB\u7597\u5BA0\u7269\u725B"), false);
+            src.sendSuccess(new TextComponent("\u00A7e/supercow quirk <safe|mixed|chaos> \u00A77- \u4FEE\u590D\u7248/\u6DF7\u5408/\u539F\u7248BUG\u7248 (>\u6743\u96502)"), false);
             return 1;
         }
 
@@ -959,6 +980,8 @@ public class SuperCowMod implements ModInitializer {
             p.sendMessage(new TextComponent("\u00A7earrow \u00A77\u7BAD\u77E2 / \u00A7efireball \u00A77\u706B\u7403 / \u00A7epotion \u00A77\u836F\u6C34 / \u00A7efirework \u00A77\u70DF\u82B1"), owner);
             p.sendMessage(new TextComponent("\u00A7echicken \u00A77\u8F70\u70B8\u9E21 / \u00A7emusic \u00A77\u97F3\u4E50 / \u00A7eexploding_cow \u00A77\u81EA\u7206\u725B"), owner);
             p.sendMessage(new TextComponent("\u00A7esummon \u00A77\u62A4\u536B\u5C0F\u725B / \u00A7esummon_parrots \u00A77\u9E66\u9E49 / \u00A7esummon_rabbits \u00A77\u5154\u5B50"), owner);
+            p.sendMessage(new TextComponent("\u00A77\u98CE\u683C\uFF1A\u00A7f" + net.dabbit.supercow.combat.Quirks.describe()
+                + " \u00A77(safe=\u5168\u4FEE\u590D\u7248 / mixed=\u6DF7\u5408 / chaos=\u5168BUG\u7248)"), owner);
             p.sendMessage(new TextComponent("\u00A77\u6D3B\u52A8\u6280\u80FD\u5B9E\u4F53\uFF1A\u00A7f" + SkillCleanup.countForOwner(owner)
                 + " \u00A77(\u9E66\u9E49/\u5154\u5B50 \u00A7f" + MinionManager.countForOwner(owner) + "\u00A77)"), owner);
             return 1;
@@ -981,6 +1004,39 @@ public class SuperCowMod implements ModInitializer {
                 return 0;
             }
             p.sendMessage(new TextComponent("\u00A7a[\u8D85\u7EA7\u725B] \u91CA\u653E\u6280\u80FD\uFF1A\u00A7e" + skill), p.getUUID());
+            return 1;
+        }
+
+        private static int quirkInfo(CommandSourceStack src) {
+            SuperCowConfig cfg = mod().getConfig();
+            src.sendSuccess(new TextComponent("\u00A76\u00A7l\u6280\u80FD\u98CE\u683C\uFF1A\u00A7f"
+                + net.dabbit.supercow.combat.Quirks.describe()), false);
+            src.sendSuccess(new TextComponent("\u00A7esafe  \u00A77- \u5168\u90E8\u4F7F\u7528\u4FEE\u590D\u7248\u903B\u8F91\uFF08\u7A33\uFF0C\u8FD9\u6B21\u66F4\u65B0\u524D\u7684\u624B\u611F\uFF09"), false);
+            src.sendSuccess(new TextComponent("\u00A7emixed \u00A77- \u6BCF\u6B21\u91CA\u653E\u968F\u673A\uFF0C\u4FEE\u590D\u7248\u4E0EBUG\u7248\u90FD\u4F1A\u51FA\u73B0\uFF08\u9ED8\u8BA4 "
+                + Math.round(cfg.quirkChaosChance * 100.0D) + "% BUG\u7248\uFF09"), false);
+            src.sendSuccess(new TextComponent("\u00A7echaos \u00A77- \u5168\u90E8\u4F7F\u7528\u539F\u7248BUG\u7248\uFF08\u6709\u7279\u8272\uFF09"), false);
+            src.sendSuccess(new TextComponent("\u00A77\u5F00\u5173\uFF1A/supercow quirk <safe|mixed|chaos|on|off>\uFF08\u9700\u6743\u96502\uFF09"), false);
+            return 1;
+        }
+
+        private static int setQuirkMode(CommandSourceStack src, String mode) {
+            SuperCowMod m = mod();
+            SuperCowConfig cfg = m.getConfig();
+            cfg.legacyQuirksEnabled = true;
+            cfg.quirkMode = mode;
+            m.saveConfigFile();
+            src.sendSuccess(new TextComponent("\u00A7a[\u8D85\u7EA7\u725B] \u6280\u80FD\u98CE\u683C\u5DF2\u5207\u6362\u4E3A \u00A7e" + mode
+                + "\u00A77\uFF08" + net.dabbit.supercow.combat.Quirks.describe() + "\uFF09"), true);
+            return 1;
+        }
+
+        private static int setQuirkFlag(CommandSourceStack src, boolean enabled) {
+            SuperCowMod m = mod();
+            SuperCowConfig cfg = m.getConfig();
+            cfg.legacyQuirksEnabled = enabled;
+            m.saveConfigFile();
+            src.sendSuccess(new TextComponent("\u00A7a[\u8D85\u7EA7\u725B] \u539F\u7248BUG\u6027\u884C\u4E3A\uFF1A\u00A7e"
+                + (enabled ? "\u5F00\u542F" : "\u5173\u95ED") + "\u00A77\uFF08" + net.dabbit.supercow.combat.Quirks.describe() + "\uFF09"), true);
             return 1;
         }
 

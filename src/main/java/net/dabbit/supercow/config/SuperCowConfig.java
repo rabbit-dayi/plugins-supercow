@@ -160,6 +160,8 @@ public class SuperCowConfig {
     // ---------------------------------------------------------------------------------
     public boolean legacySkillsEnabled = true;   // original weighted skill table instead of distance pools
     public boolean legacyQuirksEnabled = true;   // the original "bugs" are kept on purpose, as skills
+    public String quirkMode = "mixed";           // safe | mixed | chaos  (correct behaviour vs original bugs)
+    public double quirkChaosChance = 0.5;        // "mixed" mode: chance of using the buggy variant per cast
     public boolean legacyMovementEnabled = true; // velocity-based "abstract" pathfinding for the pet
 
     // Parrot / rabbit summons (original summon_parrots / summon_rabbits)
@@ -177,7 +179,7 @@ public class SuperCowConfig {
     public double arrowHealAmount = 1.0;             // every arrow volley healed the pet (original 2.5)
     public boolean musicInvertedTargeting = true;    // debuffs everyone EXCEPT the target
     public boolean musicZeroKnockback = true;        // original knockback vector was always zero
-    public boolean eggHitsAnyNonFriendly = true;     // eggs may hit other players, never the owner's party
+    public boolean eggQuirkPlayersOnly = true;       // original bug: eggs only damaged players (owner included)
 
     // Legacy movement tuning (original: OPTIMAL_COMBAT_DISTANCE 8.0, MAX_SPEED 0.6, STRAFE 0.4)
     public double legacyMoveSpeed = 0.42;

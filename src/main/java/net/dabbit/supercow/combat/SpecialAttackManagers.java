@@ -175,7 +175,8 @@ public final class SpecialAttackManagers {
         }
         // Original plugin quirk kept as a skill: every arrow volley healed the cow a little
         // (ArrowConfig.HEAL_AMOUNT was 2.5; the port keeps a smaller 1.0 so it stays balanced).
-        if (cfg.legacyQuirksEnabled && cfg.arrowHealAmount > 0.0D && shooterCow != null && shooterCow.isAlive()) {
+        boolean quirkSelfHeal = cfg.legacyQuirksEnabled && cfg.arrowHealAmount > 0.0D && Quirks.roll();
+        if (quirkSelfHeal && shooterCow != null && shooterCow.isAlive()) {
             float maxHealth = shooterCow.getMaxHealth();
             if (shooterCow.getHealth() < maxHealth) {
                 shooterCow.setHealth((float) Math.min(maxHealth, shooterCow.getHealth() + cfg.arrowHealAmount));
@@ -487,7 +488,8 @@ public final class SpecialAttackManagers {
         }
 
         if (!chickens.isEmpty()) {
-            ACTIVE_BOMBARDMENTS.add(new BombardmentTask(level, shooterCow, ownerUuid, target, chickens, rageMode, cfg.bombardmentDurationTicks, cfg.eggDropIntervalTicks, cfg.chickenHeightOffset));
+            ACTIVE_BOMBARDMENTS.add(new BombardmentTask(level, shooterCow, ownerUuid, target, chickens, rageMode,
+                cfg.bombardmentDurationTicks, cfg.eggDropIntervalTicks, cfg.chickenHeightOffset, Quirks.roll()));
             level.playSound(null, target.getX(), target.getY(), target.getZ(), SoundEvents.CHICKEN_AMBIENT, SoundSource.NEUTRAL, 0.8F, 1.2F);
         }
     }
@@ -502,6 +504,7 @@ public final class SpecialAttackManagers {
         final int maxTicks;
         final int eggInterval;
         final double heightOffset;
+        final boolean quirkEgg;
         int ticks = 0;
 
         BombardmentTask(
@@ -513,7 +516,8 @@ public final class SpecialAttackManagers {
             boolean rageMode,
             int maxTicks,
             int eggInterval,
-            double heightOffset
+            double heightOffset,
+            boolean quirkEgg
         ) {
             this.level = level;
             this.shooterCow = shooterCow;
@@ -523,6 +527,7 @@ public final class SpecialAttackManagers {
             this.rageMode = rageMode;
             this.maxTicks = maxTicks;
             this.eggInterval = Math.max(10, eggInterval);
+            this.quirkEgg = quirkEgg;
             this.heightOffset = heightOffset;
         }
 
@@ -544,7 +549,7 @@ public final class SpecialAttackManagers {
                 chicken.moveTo(nx, ny, nz, chicken.yRot + 10.0F, 0.0F);
 
                 if (ticks % eggInterval == 0) {
-                    SuperCowEgg egg = new SuperCowEgg(level, nx, ny - 0.3D, nz, shooterCow, ownerUuid, target, rageMode);
+                    SuperCowEgg egg = new SuperCowEgg(level, nx, ny - 0.3D, nz, shooterCow, ownerUuid, target, rageMode, quirkEgg);
                     Vec3 dir = target.position().add(0.0D, target.getBbHeight() * 0.5D, 0.0D).subtract(nx, ny - 0.3D, nz);
                     egg.shoot(dir.x, dir.y, dir.z, 0.8F, 1.5F);
                     level.addFreshEntity(egg);
@@ -572,7 +577,8 @@ public final class SpecialAttackManagers {
     // =========================================================================
     public static void startMusicAttack(ServerLevel level, LivingEntity shooterCow, UUID ownerUuid, LivingEntity target, boolean rageMode) {
         SuperCowConfig cfg = SuperCowMod.getInstance().getConfig();
-        ACTIVE_MUSIC_ATTACKS.add(new MusicAttackTask(level, shooterCow, ownerUuid, target, rageMode, cfg.musicDurationTicks, cfg.musicTickInterval));
+        ACTIVE_MUSIC_ATTACKS.add(new MusicAttackTask(level, shooterCow, ownerUuid, target, rageMode,
+            cfg.musicDurationTicks, cfg.musicTickInterval, Quirks.roll()));
     }
 
     private static class MusicAttackTask {
@@ -583,9 +589,10 @@ public final class SpecialAttackManagers {
         final boolean rageMode;
         final int maxTicks;
         final int interval;
+        final boolean quirkMusic;
         int ticks = 0;
 
-        MusicAttackTask(ServerLevel level, LivingEntity shooterCow, UUID ownerUuid, LivingEntity target, boolean rageMode, int maxTicks, int interval) {
+        MusicAttackTask(ServerLevel level, LivingEntity shooterCow, UUID ownerUuid, LivingEntity target, boolean rageMode, int maxTicks, int interval, boolean quirkMusic) {
             this.level = level;
             this.shooterCow = shooterCow;
             this.ownerUuid = ownerUuid;
@@ -593,6 +600,7 @@ public final class SpecialAttackManagers {
             this.rageMode = rageMode;
             this.maxTicks = maxTicks;
             this.interval = Math.max(5, interval);
+            this.quirkMusic = quirkMusic;
         }
 
         boolean tick() {
@@ -638,7 +646,7 @@ public final class SpecialAttackManagers {
                     // primary target, so the crowd around the pet gets slowed/weakened while the main
                     // target walks away clean. Damage is still dealt normally to all valid targets.
                     boolean isPrimaryTarget = target != null && entity.getUUID().equals(target.getUUID());
-                    boolean invertDebuffs = cfg.legacyQuirksEnabled && cfg.musicInvertedTargeting;
+                    boolean invertDebuffs = quirkMusic && cfg.musicInvertedTargeting;
                     if (!invertDebuffs || !isPrimaryTarget) {
                         entity.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, cfg.musicDebuffTicks, 0));
                         if (rageMode) {
@@ -648,7 +656,7 @@ public final class SpecialAttackManagers {
 
                     // Quirk kept as a skill: the original knockback vector was (loc - loc) = zero, so
                     // the "knockback" never pushed anything anywhere. No NaN, simply no shove.
-                    if (!(cfg.legacyQuirksEnabled && cfg.musicZeroKnockback)) {
+                    if (!(quirkMusic && cfg.musicZeroKnockback)) {
                         Vec3 away = entity.position().subtract(shooterCow.position());
                         if (away.lengthSqr() > 1.0E-4D) {
                             Vec3 kb = away.normalize().scale(cfg.musicKnockback);

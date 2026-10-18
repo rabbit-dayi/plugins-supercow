@@ -447,7 +447,7 @@ public class CombatManager {
                 // Quirk kept as a skill: the original 1.19.4 dispatch for "exploding_cow" actually
                 // called shootPotion(), so one in five exploding cows is just a potion throw.
                 if (cfg.legacyQuirksEnabled && cfg.explodingCowPotionBugChance > 0.0D
-                    && random.nextDouble() < cfg.explodingCowPotionBugChance) {
+                    && Quirks.roll() && random.nextDouble() < cfg.explodingCowPotionBugChance) {
                     SpecialAttackManagers.shootPotion(level, pet, ownerUuid, target, rage);
                 } else {
                     SpecialAttackManagers.launchExplodingCow(level, pet, ownerUuid, target, rage);
@@ -468,7 +468,10 @@ public class CombatManager {
                 // Quirk kept as a skill: the original consumeHayBale() started with an unconditional
                 // "return true", so skill-triggered summons never paid for the hay bale. Only the
                 // manual /supercow attack summon charges the player.
-                return owner != null && summonManager.summonHelperCows(level, owner, pet, target, rage, !manualCommand);
+                // Manual casts always pay the hay bale; skill-triggered summons only skip the cost when
+                // this cast rolled the original quirk (consumeHayBale() returned true unconditionally).
+                boolean freeSummon = !manualCommand && Quirks.roll();
+                return owner != null && summonManager.summonHelperCows(level, owner, pet, target, rage, freeSummon);
             case "rage":
                 if (owner != null) {
                     triggerRageMode(ownerUuid, pet, owner);

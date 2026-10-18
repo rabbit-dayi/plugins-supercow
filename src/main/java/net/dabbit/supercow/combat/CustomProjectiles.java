@@ -16,6 +16,7 @@ import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.AbstractArrow;
 import net.minecraft.world.entity.projectile.Arrow;
 import net.minecraft.world.entity.projectile.SmallFireball;
@@ -304,6 +305,8 @@ public final class CustomProjectiles {
         private final LivingEntity shooterCow;
         private final LivingEntity intendedTarget;
         private final boolean rageMode;
+        /** original bug kept as a skill: eggs only damaged players (the owner included) */
+        private final boolean quirkPlayersOnly;
 
         public SuperCowEgg(
             ServerLevel level,
@@ -313,9 +316,11 @@ public final class CustomProjectiles {
             LivingEntity shooterCow,
             UUID ownerUuid,
             LivingEntity intendedTarget,
-            boolean rageMode
+            boolean rageMode,
+            boolean quirkPlayersOnly
         ) {
             super(level, x, y, z);
+            this.quirkPlayersOnly = quirkPlayersOnly;
             this.shooterCow = shooterCow;
             this.ownerUuid = ownerUuid;
             this.intendedTarget = intendedTarget;
@@ -347,11 +352,17 @@ public final class CustomProjectiles {
                 float baseDmg = (float) (rageMode ? cfg.rageEggExplosionDamage : cfg.eggExplosionDamage);
 
                 AABB box = new AABB(pos.x - radius, pos.y - radius, pos.z - radius, pos.x + radius, pos.y + radius, pos.z + radius);
+                boolean playersOnlyQuirk = quirkPlayersOnly && cfg.eggQuirkPlayersOnly;
                 List<LivingEntity> nearby = serverLevel.getEntitiesOfClass(LivingEntity.class, box);
                 for (LivingEntity entity : nearby) {
-                    // FIXED BUG: Previously checked if (entity.type != EntityType.PLAYER) return,
-                    // which only damaged players (including owner) and ignored monsters!
-                    if (!TargetValidator.isValidAoETarget(entity, ownerUuid, intendedTarget)) {
+                    if (playersOnlyQuirk) {
+                        // Quirk kept as a skill: the original egg impact handler bailed out on anything
+                        // that was not a Player, so the bombardment only ever hurt players - owner included.
+                        if (!(entity instanceof Player) || entity == shooterCow) {
+                            continue;
+                        }
+                    } else if (!TargetValidator.isValidAoETarget(entity, ownerUuid, intendedTarget)) {
+                        // FIXED BUG: the repaired path damages hostiles and never the owner's party.
                         continue;
                     }
                     double dist = entity.position().distanceTo(pos);
