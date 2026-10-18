@@ -188,9 +188,22 @@
 - **同步包**：面板是 `SimpleContainer` + 自定义 `ChestMenu`，每次点击后自己构造
   `ClientboundContainerSetContentPacket`（90 = 54 容器格 + 玩家背包 27 + 快捷栏 9）重推一遍，
   客户端不会出现"点了没反应"的鬼影物品。
-- **点击必须重新解锁同步**：1.16.5 的 `ServerGamePacketListenerImpl.handleContainerClick` 在
-  `ItemStack.matches` 失败时会 `setSynched(player, false)`，之后 `handleContainerClick` 直接 return。
-  所以 `clicked()` 末尾一定要 `setSynched(sp, true)`，否则面板只接受**一次**点击就彻底失灵。
+- **点击走"原生受理"路径**（这是"客户端把东西拿到背包 / 所有东西都点不了"的根治）：
+  1.16.5 的 `ServerGamePacketListenerImpl.handleContainerClick` 会拿
+  `menu.clicked(...)` 的返回值和客户端在包里声明"点完之后光标里应该是什么"做
+  `ItemStack.matches` 比较。比较通过 → `ack(true)` + `broadcastChanges`；比较失败 →
+  `ack(false)` + `setSynched(player, false)` + 全量重推。
+  **一次 reject 在真客户端上就会留下"图标被拿进背包"的预测残留**，而连续的 reject 还会让
+  同一个窗口在后面丢掉所有点击（`isSynched == false` 时后续点击被直接丢弃）。
+  因此现在不再"拒绝"点击：
+  - `mixin/ServerGamePacketListenerMixin` 在 `handleContainerClick` 的 `HEAD` 把
+    `packet.getItem()`（客户端预测的光标物品）存进 `PetGui.PREDICTED_CARRIED`（ThreadLocal）；
+  - `PetMenu.clicked` 处理后**原样返回这个预测值**，于是 vanilla 走 `ack(true)`，不 reject、不
+    重同步、不丢同步状态；面板内容由随后的 `pushContents` 覆盖回权威值，光标随之归零。
+  - 玩家背包半区与窗口外的点击同样原样返回预测值并重推内容，物品永远不移动、也不会复制。
+- **关闭/召回延后一 tick**：在 `clicked()` 里直接 `closeContainer()` 会让本次点击的容器 ack
+  来不及发出（客户端报 `Server didn't respond to transaction`，光标可能留残影）；
+  现在统一走 `closeNextTick()`（`server.execute`），ack 先发、关闭包后到。
 - **面板只吃自己的格子**：`slotId in [0,54) && sp.containerMenu == this` 才处理，玩家背包半区
   的点击原样放过（不会吞物品、不会复制）。
 - **打开方式走自己的 mixin**：本服的 fabric-api 0.42 里 `UseEntityCallback` 不触发
@@ -199,6 +212,9 @@
   的 `HEAD` 读 `ServerboundInteractPacket`，`Action.INTERACT` + `Cow` 才交给
   `SuperCowMod.handleCowRightClick`，被消费时 `ci.cancel()`。
 - `stillValid`：主人 UUID 匹配、宠物存活、距离 ≤ 24 格，否则面板自动关闭。
+  解析宠物时若 `ServerLevel#getEntity` 因区块未加载返回 null，会回退查模组自己的
+  `getActivePet` 注册表——否则 `stillValid` 抖动会让 `ServerPlayer.tick()` 直接
+  `closeContainer()`，真客户端窗口 id 失配后同样表现为"所有东西点不了"。
 
 ## 十个"抽象"技能（quirk skills）
 
@@ -246,8 +262,9 @@
 - **冻结尸体清理**：被打死但永远不播放死亡动画的实体（`deathTime` 卡住 40 tick）会被主动移除，
   防止尸体永久占位（掉落物在 `die()` 阶段已经生成，移除不影响掉落）。
 
-- **面板点击不再"一点就死"**：`PetGui.clicked` 处理所有 `ClickType`，并在末尾 `setSynched(sp, true)`；
-  面板关闭时（`removed(Player)`）才写配置，避免每次点击刷盘。
+- **面板点击不再"一点就死"**：`PetGui.clicked` 处理所有 `ClickType`，并返回客户端预测值让 vanilla
+  走 `ack(true)`（不再依赖 `setSynched` 抢跑）；面板关闭时（`removed(Player)`）才写配置，
+  避免每次点击刷盘。
 - **技能实体随主人清理**：`QuirkSkills.cleanupForOwner` 现在同时调用 `SkillCleanup.cleanupForOwner`，
   宠物死亡 / 召回 / 主人下线时，奶牛雨的牛、蝴蝶群的蝙蝠、镜像牛都不会留在世界里。
 - **AoE 白名单只看真目标**：`nearby(...)` 拆分出带 `explicitTarget` 的重载，只有真正的技能目标
@@ -277,8 +294,12 @@
 - 十个抽象技能逐个强制释放（`/supercow skill <id>`）：奶牛雨当场刷出 4 只牛并砸死僵尸、
   哞叫波/干草旋风击杀僵尸并掉经验球、蝴蝶群刷 3 只蝙蝠、镜像牛让牛的计数 1→2、彩纸爆炸把克隆牛收走；
   释放后服务器日志除世界自带的 `Couldn't load advancement` 外无任何 Exception。
-- 面板点击在客户端的视角会显示 `Server rejected transaction`（vanilla 的 ack/重同步路径），
-  服务端状态是正确的，属于预期日志。
+- 面板点击（无客户端，mineflayer 驱动，逐次打印光标与背包）：
+  点 0/1/9/10/2/4/36/53、右键 9 与 1、点玩家背包半区（槽 60/61/62）、双击背包物品、
+  点窗口外（-999）——**全部不再出现 `Server rejected transaction` / `Server didn't respond`**，
+  每次点击后光标都是空、背包内容（木剑/皮革/牛肉/桶/牛奶桶/腐肉）一一不变；
+  双击背包物品之后再点面板格仍正常生效（窗口没有变砖），关闭后 `/supercow gui` 可再次打开。
+  日志除世界自带的 `Couldn't load advancement` 外无任何 Exception / ERROR。
 
 
 
