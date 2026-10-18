@@ -184,18 +184,23 @@ public class SuperCowConfig {
     // Legacy movement tuning (original: OPTIMAL_COMBAT_DISTANCE 8.0, MAX_SPEED 0.6, STRAFE 0.4)
     public double legacyMoveSpeed = 0.42;
     public double legacyStrafeStrength = 0.16;
+    // 追求"绕圈 Z 字"的抽象感只在战斗中保留；走路跟随时走直线，别让牛一直原地转圈。
+    public boolean legacyStrafeOnlyInCombat = true;
+    public double legacyTravelSpeed = 0.3;       // 非战斗行进的基准速度（比战斗冲刺慢一点，看着正常）
     public double legacyJumpPower = 0.42;
     public double legacyOptimalDistance = 8.0;
     public double legacyFollowStopDistance = 2.0;
 
     // 转圈飞天（原插件寻路可以把自己送上天）—— 作为小概率触发的技能保留
     public boolean skySpiralEnabled = true;      // 总开关
-    public double skySpiralChance = 0.03;        // 每次锁定新目标时的触发概率（还要再乘 quirkMode 的掷骰）
-    public int skySpiralDurationTicks = 50;      // 一次螺旋上升持续 2.5 秒
-    public double skySpiralLift = 0.35;          // 每 tick 上升速度（会被原版重力衰减）
-    public double skySpiralMaxHeight = 10.0;     // 相对起点最多升高 10 格（怕摔死）
-    public double skySpiralSpinSpeed = 0.35;     // 每 tick 转多少弧度（转圈的手感）
+    public double skySpiralChance = 0.04;        // 每次锁定新目标时的触发概率（还要再乘 quirkMode 的掷骰）
+    public int skySpiralDurationTicks = 70;      // 一次螺旋上升持续 3.5 秒
+    public double skySpiralLift = 0.7;           // 每 tick 上升速度（会被原版重力衰减），0.7 ≈ 14 格/秒
+    public double skySpiralMaxHeight = 22.0;     // 相对起点最多升高 22 格
+    public double skySpiralSpinSpeed = 0.5;      // 每 tick 转多少弧度（转圈的手感）
     public int skySpiralCooldownTicks = 900;     // 一次飞天之后 45 秒内不再触发
+    public boolean skySpiralLaunchesAway = true; // 起飞瞬间给一个大跳，真的是"猛"地冲上天
+    public double skySpiralLaunchVelocity = 1.35; // 起飞初速度（1.35 ≈ 一次跳两格多）
 
     // ---------------------------------------------------------------------------------
     // 母牛箱子 GUI（右键宠物牛）与技能开关

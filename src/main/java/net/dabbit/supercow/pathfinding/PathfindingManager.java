@@ -376,11 +376,31 @@ public class PathfindingManager {
 
         // The original plugin drifted the strafe angle forever: +10 degrees per tick, or +-45
         // degrees on a 10% roll. That is why the pet circles instead of walking straight.
-        state.strafeAngle += RANDOM.nextDouble() < 0.1D ? (RANDOM.nextBoolean() ? 45.0D : -45.0D) : 10.0D;
-        double rad = Math.toRadians(state.strafeAngle);
-        double strafe = cfg.legacyStrafeStrength;
-        double vx = flat.x + Math.cos(rad) * strafe;
-        double vz = flat.z + Math.sin(rad) * strafe;
+        // Kept for combat only: while it is just walking (follow mode, no target) the pet should
+        // walk a straight line like a normal animal instead of dancing in place.
+        // Following the owner is not combat: the pet should walk, not dance.
+        boolean inCombat = state.targetEntity != null
+            && !(state.targetEntity instanceof net.minecraft.world.entity.player.Player);
+        boolean strafing = !cfg.legacyStrafeOnlyInCombat || inCombat;
+        double vx = flat.x;
+        double vz = flat.z;
+        if (strafing) {
+            state.strafeAngle += RANDOM.nextDouble() < 0.1D ? (RANDOM.nextBoolean() ? 45.0D : -45.0D) : 10.0D;
+            double rad = Math.toRadians(state.strafeAngle);
+            double strafe = cfg.legacyStrafeStrength;
+            vx += Math.cos(rad) * strafe;
+            vz += Math.sin(rad) * strafe;
+        } else {
+            // Re-aim the path straight at the target every tick and cap the travel speed.
+            Vec3 travel = state.targetPos.subtract(pos);
+            Vec3 flatTravel = new Vec3(travel.x, 0.0D, travel.z);
+            if (flatTravel.lengthSqr() > 1.0E-4D) {
+                double walkSpeed = Math.min(cfg.legacyTravelSpeed, Math.max(0.12D, dist * 0.12D));
+                flatTravel = flatTravel.normalize().scale(walkSpeed);
+                vx = flatTravel.x;
+                vz = flatTravel.z;
+            }
+        }
 
         double vy = mob.getDeltaMovement().y;
         if (mob.isOnGround()) {
@@ -474,6 +494,17 @@ public class PathfindingManager {
             mob.getY(),
             RANDOM.nextDouble() * Math.PI * 2.0D
         ));
+        if (cfg.skySpiralLaunchesAway) {
+            // One big kick at take-off so the pet visibly rockets off the ground instead of
+            // slowly drifting upwards.
+            mob.setDeltaMovement(mob.getDeltaMovement().x, cfg.skySpiralLaunchVelocity, mob.getDeltaMovement().z);
+            mob.hasImpulse = true;
+            if (mob.level instanceof net.minecraft.server.level.ServerLevel) {
+                ((net.minecraft.server.level.ServerLevel) mob.level).sendParticles(
+                    net.minecraft.core.particles.ParticleTypes.CLOUD,
+                    mob.getX(), mob.getY() + 0.3D, mob.getZ(), 18, 0.5D, 0.2D, 0.5D, 0.05D);
+            }
+        }
     }
 
     private void tickSkySpiral(Mob mob, SkySpiral spiral, long now, SuperCowConfig cfg, double maxSpeed) {
@@ -484,9 +515,22 @@ public class PathfindingManager {
             return;
         }
         double angle = spiral.baseAngle + (now - spiral.startTick) * cfg.skySpiralSpinSpeed;
-        double speed = maxSpeed * 0.8D;
-        double lift = cfg.skySpiralLift * Mth.clamp(1.0D - height / maxHeight, 0.2D, 1.0D);
+        double speed = maxSpeed * 1.1D;
+        // 旱地起飞：前半段给满推力，接近上限才收力，视觉上就是"猛地往上冲"。
+        double fade = Mth.clamp(1.0D - height / maxHeight, 0.15D, 1.0D);
+        double lift = cfg.skySpiralLift * (height < maxHeight * 0.6D ? 1.0D : Math.max(fade, 0.35D));
+        // 已经在下坠（比如撞了顶）就补一脚，保证整体是往上走的。
+        if (mob.getDeltaMovement().y < 0.05D && height < maxHeight * 0.85D) {
+            lift = Math.max(lift, cfg.skySpiralLift * 0.8D);
+        }
         applyVelocity(mob, Math.cos(angle) * speed, Math.sin(angle) * speed, lift, maxSpeed);
+        // Vanilla travel() eats the upward push of a walking mob: keep re-stamping the vertical
+        // impulse so the launch actually climbs instead of hopping in place.
+        if (height < maxHeight) {
+            Vec3 dm = mob.getDeltaMovement();
+            mob.setDeltaMovement(dm.x, Math.max(dm.y, lift), dm.z);
+            mob.hasImpulse = true;
+        }
     }
 
     private void endSkySpiral(SkySpiral spiral, long now) {

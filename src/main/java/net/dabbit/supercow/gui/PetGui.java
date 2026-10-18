@@ -118,7 +118,7 @@ public final class PetGui {
                 return sp.inventory.getCarried();
             }
             if (slotId >= 0 && slotId < SIZE) {
-                handleClick(slotId, sp);
+                handleClick(slotId, button, sp);
                 if (sp.containerMenu == this) {
                     refresh();
                     pushContents(sp);
@@ -188,7 +188,13 @@ public final class PetGui {
             } else {
                 info.add("§7还没有宠物牛");
             }
-            container.setItem(0, make(Items.COW_SPAWN_EGG, "§6§l超级牛 §e" + levelText, info));
+            List<String> summary = new ArrayList<>();
+            summary.add("§7" + String.format("%.1f", data != null ? data.currentHealth : 0.0D) + " / "
+                + String.format("%.1f", data != null ? data.maxHealth : 0.0D) + " HP");
+            summary.add("§7EXP " + (data != null ? data.exp : 0) + " / " + (data != null ? mod.expNeeded(data.level) : 0));
+            summary.add("§7击杀 " + (data != null ? data.totalKills : 0));
+            summary.add("§8点击刷新状态");
+            container.setItem(0, make(Items.COW_SPAWN_EGG, "§6§l超级牛 §e" + levelText, summary));
 
             int enabled = 0;
             for (Skills.Skill skill : Skills.all()) {
@@ -196,14 +202,17 @@ public final class PetGui {
                     enabled++;
                 }
             }
-            container.setItem(1, make(Items.EXPERIENCE_BOTTLE, "§a技能开关",
-                java.util.Arrays.asList("§7已启用：§f" + enabled + " / " + Skills.all().size(), "§7点击下面的技能图标切换")));
+            container.setItem(1, make(Items.EXPERIENCE_BOTTLE, "§a技能开关 §f" + enabled + "/" + Skills.all().size(),
+                java.util.Arrays.asList("§7已启用：§f" + enabled + " / " + Skills.all().size(),
+                    "§7左键 = 全部开启", "§7右键 = 全部关闭")));
             container.setItem(2, make(Items.GOLDEN_APPLE, "§d宠物状态",
                 java.util.Arrays.asList("§7存活：" + (pet != null && pet.isAlive() ? "§a是" : "§c否"),
                     "§7坐标：" + (pet != null ? String.format("§f%.0f, %.0f, %.0f", pet.getX(), pet.getY(), pet.getZ()) : "§7-"))));
-            container.setItem(3, make(Items.BOOK, "§e使用说明",
-                java.util.Arrays.asList("§7右键宠物牛打开本面板", "§7手里拿干草块右键 = 喂食",
-                    "§7每格代表一个技能，点击开/关", "§7关闭的技能不会被随机抽到")));
+            container.setItem(3, make(Items.PAPER, "§e使用说明 §8(只读)",
+                java.util.Arrays.asList("§7右键宠物牛打开本面板，潜行右键看文字信息", "§7手里拿干草块右键 = 喂食",
+                    "§7第一排：宠物信息 / 技能开关(左键全开 右键全关) / 宠物状态(左键刷新) / 本页",
+                    "§7第二排起：每个技能一格，左键开 / 右键关",
+                    "§7最下一排：战斗模式 / 召唤模式 / 技能风格 / 治疗 / 召回 / 召唤 / 全开 / 全关 / 关闭")));
 
             container.setItem(SLOT_MODE, make(Items.SHIELD,
                 "§b战斗模式 §f" + (data != null ? PetMode.fromString(data.combatMode).getDisplayName() : "-"),
@@ -262,7 +271,7 @@ public final class PetGui {
 
         // ------------------------------------------------------------ click handling
 
-        private void handleClick(int slot, ServerPlayer player) {
+        private void handleClick(int slot, int button, ServerPlayer player) {
             SuperCowMod mod = SuperCowMod.getInstance();
             SuperCowConfig cfg = mod.getConfig();
             PetData data = mod.getPetData(ownerUuid);
@@ -270,10 +279,42 @@ public final class PetGui {
 
             if (slot >= SKILL_START && slot < SKILL_START + skills.size()) {
                 Skills.Skill skill = skills.get(slot - SKILL_START);
-                boolean now = !cfg.isSkillEnabled(skill.id);
+                // Left click toggles, right click forces "off" (== a clear "this one is disabled").
+                boolean now = button == 1 ? false : !cfg.isSkillEnabled(skill.id);
                 cfg.setSkillEnabled(skill.id, now);
                 configDirty = true;
                 tell(player, "技能 §f" + skill.display + (now ? " §a开启" : " §c关闭"));
+                return;
+            }
+
+            // ---- first row: every icon does something ----
+            if (slot <= 3) {
+                if (slot == 1) {
+                    boolean allOn = button != 1;
+                    for (Skills.Skill skill : Skills.all()) {
+                        cfg.setSkillEnabled(skill.id, allOn);
+                    }
+                    configDirty = true;
+                    tell(player, allOn ? "§a已开启全部技能" : "§c已关闭全部技能");
+                } else if (slot == 0) {
+                    int on = 0;
+                    for (Skills.Skill skill : Skills.all()) {
+                        if (cfg.isSkillEnabled(skill.id)) {
+                            on++;
+                        }
+                    }
+                    tell(player, "§6Lv." + (data != null ? data.level : 0) + " §f"
+                        + String.format("%.1f", data != null ? data.currentHealth : 0.0D) + "/"
+                        + String.format("%.1f", data != null ? data.maxHealth : 0.0D) + " HP §7技能 "
+                        + on + "/" + Skills.all().size());
+                } else if (slot == 2) {
+                    Entity petEntity = petEntity(player, petUuid);
+                    tell(player, petEntity != null
+                        ? "§a宠物在 §f" + String.format("%.0f, %.0f, %.0f", petEntity.getX(), petEntity.getY(), petEntity.getZ())
+                        : "§c宠物不在此世界");
+                } else {
+                    tell(player, "§7说明页：鼠标悬停看说明，其他格子可点击");
+                }
                 return;
             }
             if (data == null) {
@@ -327,9 +368,6 @@ public final class PetGui {
                 tell(player, on ? "§a已开启全部技能" : "§c已关闭全部技能");
             } else if (slot == SLOT_CLOSE) {
                 player.closeContainer();
-            } else if (slot <= 3) {
-                // Info icons: nothing to run, but the click must not feel dead.
-                tell(player, "§7" + INFO_KEYS[slot]);
             } else {
                 tell(player, "§7这一格只是装饰");
             }
