@@ -50,7 +50,12 @@ public class SuperCowConfig {
     // Combat orchestration (conservative)
     public double closeRangeDistance = 3.0; // melee distance
     public double mediumRangeDistance = 9.0; // special-attack mid band
-    public double followDistance = 4.0;
+    // 跟随站位：牛停在离主人这个距离的地方。原来是 4 格，贴得太近——牛走路时的蹄声
+    // 会一直在耳边响。默认改成 10 格（"远"档），近/远可以随时调。
+    public double followDistance = 10.0;
+    public double followStopDistance = 1.5; // 进入这个距离就不再往前挤（防止原地抖腿）
+    public double followStartBuffer = 1.5;   // 刚好卡在 followDistance 上时的手抖不触发移动
+    public boolean petAmbientSoundEnabled = false; // 牛自己的哞哞声默认关掉，打架时太吵
     public double teleportDistance = 24.0;
     public double detectionRange = 10.0; // AGGRESSIVE auto-acquire
     public double protectRange = 6.0; // PROTECTING auto-acquire

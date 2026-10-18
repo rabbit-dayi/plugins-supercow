@@ -338,7 +338,10 @@ public class PathfindingManager {
         }
         maybeStartSkySpiral(state, cfg, now);
 
-        if (dist < 2.0D) {
+        SuperCowConfig scfg = config();
+        double arrive = scfg != null && scfg.followStopDistance > 0.0D
+            ? Math.max(0.5D, scfg.followStopDistance) : 2.0D;
+        if (dist < arrive) {
             // Inside the fight: stop pushing forward but let the strafe wiggle continue.
             mob.getNavigation().stop();
             applyVelocity(mob, 0.0D, 0.0D, mob.getDeltaMovement().y, maxSpeed);

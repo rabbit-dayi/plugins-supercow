@@ -63,6 +63,7 @@ public final class PetGui {
     private static final int SLOT_MODE = 4;
     private static final int SLOT_SUMMON_MODE = 5;
     private static final int SLOT_QUIRK = 6;
+    private static final int SLOT_FOLLOW = 7;
     private static final int SLOT_HEAL = 36;
     private static final int SLOT_RECALL = 37;
     private static final int SLOT_CALL = 38;
@@ -72,6 +73,27 @@ public final class PetGui {
     private static final String[] INFO_KEYS = {
         "宠物信息", "技能开关数量", "宠物状态", "使用说明"
     };
+
+    public static final double FOLLOW_MIN = 2.0D;
+    public static final double FOLLOW_MAX = 24.0D;
+
+    public static double clampFollow(double value) {
+        if (Double.isNaN(value)) {
+            return 10.0D;
+        }
+        return Math.max(FOLLOW_MIN, Math.min(FOLLOW_MAX, Math.round(value)));
+    }
+
+    public static String followRangeLabel(SuperCowConfig cfg) {
+        double d = cfg.followDistance;
+        if (d <= 4.0D) {
+            return "§a近";
+        }
+        if (d <= 11.0D) {
+            return "§e中";
+        }
+        return "§6远";
+    }
 
     private PetGui() {
     }
@@ -252,6 +274,14 @@ public final class PetGui {
                 java.util.Arrays.asList("§7当前：§f" + net.dabbit.supercow.combat.Quirks.describe(),
                     "§7safe=全修复 / mixed=混合 / chaos=全BUG", "§7点击循环切换")));
 
+            container.setItem(SLOT_FOLLOW, make(Items.LEAD,
+                "§b跟随范围 §f" + followRangeLabel(cfg),
+                java.util.Arrays.asList(
+                    "§f" + String.format("%.1f", cfg.followDistance) + "§7 格：牛停在离你这么远的地方",
+                    "§8左键 = 更远 / 右键 = 更近（2 ~ 24 格）",
+                    "§8远一点，牛走路的声音就离你远一点",
+                    "§8指令：/supercow follow <格数>")));
+
             List<Skills.Skill> skills = Skills.all();
             for (int i = 0; i < skills.size() && SKILL_START + i < SLOT_HEAL; i++) {
                 Skills.Skill skill = skills.get(i);
@@ -383,6 +413,12 @@ public final class PetGui {
                 cfg.quirkMode = next;
                 configDirty = true;
                 tell(player, "§d技能风格 §f" + net.dabbit.supercow.combat.Quirks.describe());
+            } else if (slot == SLOT_FOLLOW) {
+                double step = button == 1 ? -1.0D : 1.0D;
+                cfg.followDistance = clampFollow(cfg.followDistance + step);
+                configDirty = true;
+                tell(player, "§b跟随范围 §f" + followRangeLabel(cfg)
+                    + " §7(" + String.format("%.1f", cfg.followDistance) + " 格)");
             } else if (slot == SLOT_HEAL) {
                 Entity entity = petEntity(player, petUuid);
                 if (entity instanceof Cow) {

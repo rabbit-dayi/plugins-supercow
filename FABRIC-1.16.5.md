@@ -216,6 +216,31 @@
   `getActivePet` 注册表——否则 `stillValid` 抖动会让 `ServerPlayer.tick()` 直接
   `closeContainer()`，真客户端窗口 id 失配后同样表现为"所有东西点不了"。
 
+## 跟随距离：默认"远"（10 格）
+
+原实现的跟随阈值是 `followDistance = 4.0`：牛一离开 4 格就往前走，走到 2.5 格停下。
+贴这么近的结果是牛一直在玩家脚边起步/刹车，蹄声连成一片——听起来像在耳边打鼓。
+
+现在的跟随逻辑（`CombatManager.followOwnerIfNeeded`）：
+
+- `followDistance` 默认 **10.0 格**（原先 4.0），可在 2 ~ 24 格之间调整。
+- **迟滞（hysteresis）**：超过 `followDistance + followStartBuffer(1.5)` 才开始走；
+  一旦开始走就一直走到 `followStopDistance(1.5)` 才停。否则刚好卡在阈值上时，牛会
+  反复"走一步—停一步"，又变成了原地抖腿。
+- `teleportDistance = 24` 之外直接瞬移过来，不受跟随距离限制。
+- 抽象移动器（`PathfindingManager.tickLegacyMover`）的到达判定也用 `followStopDistance`，
+  保证"停下"的两个判定不会互相打架。
+- **牛的哞哞声默认静音**（`petAmbientSoundEnabled = false`）：跟随时一声接一声太吵，
+  面板/配置里可以开回来。
+
+怎么调：
+
+- 面板第二行新增 `跟随范围` 格（牵引绳图标）：**左键更远 / 右键更近**，每格 1 米，
+  范围 2 ~ 24，图标名字会显示"近 / 中 / 远"和具体格数。
+- 指令：`/supercow follow`（看当前值）、`/supercow follow 14`（直接设置）。
+- 配置文件：`config/supercow-config.json` 的 `followDistance` / `followStopDistance` /
+  `followStartBuffer` / `petAmbientSoundEnabled`。
+
 ## 十个"抽象"技能（quirk skills）
 
 在原来 10 个技能之外再加 10 个（合计 21 个，面板里每一个都能单独开关，权重都是 8 / 14）：

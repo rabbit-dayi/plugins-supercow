@@ -336,13 +336,22 @@ public class CombatManager {
             return;
         }
         double dist = pet.distanceTo(owner);
+        double follow = Math.max(2.0D, cfg.followDistance);
+        double stop = Math.max(0.5D, cfg.followStopDistance);
+        // Hysteresis: with a single threshold the pet would start walking the instant it drifted
+        // 0.01 block past the line and stop as soon as it crossed back, which reads as the pet
+        // shuffling in place right next to the player.
+        double resume = Math.max(follow, stop) + Math.max(0.0D, cfg.followStartBuffer);
         if (dist > cfg.teleportDistance) {
             pathfindingManager.stopPathfinding(pet);
             pet.teleportTo(owner.getX() + 1.5D, owner.getY(), owner.getZ() + 1.5D);
-        } else if (dist > cfg.followDistance) {
+        } else if (pathfindingManager.hasActivePath(pet.getUUID())) {
+            // Already walking towards the owner: hold the line until the stand-off distance.
+            if (dist <= stop) {
+                pathfindingManager.stopPathfinding(pet);
+            }
+        } else if (dist > resume) {
             pathfindingManager.moveToEntity(pet, owner, 1.2D);
-        } else if (dist <= 2.5D) {
-            pathfindingManager.stopPathfinding(pet);
         }
     }
 

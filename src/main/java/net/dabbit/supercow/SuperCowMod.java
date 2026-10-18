@@ -724,6 +724,10 @@ public class SuperCowMod implements ModInitializer {
                 if (serverTicks % 2 == 0) {
                     combatManager.tickPetCombat(ownerUuid, pet, owner, data);
                 }
+                // 牛自己的哞哞声默认关掉：跟着跑的时候一声接一声太吵（配置可开回来）。
+                if (pet.isSilent() != !config.petAmbientSoundEnabled) {
+                    pet.setSilent(!config.petAmbientSoundEnabled);
+                }
             } else if (owner != null && getActivePet(ownerUuid) == null && petDataByOwner.get(ownerUuid) != null
                 && petDataByOwner.get(ownerUuid).isAlive) {
                 // Pet chunk unloaded / entity lost: re-spawn next to the owner.
@@ -976,6 +980,11 @@ public class SuperCowMod implements ModInitializer {
                     .then(Commands.literal("chaos").executes(ctx -> setQuirkMode(ctx.getSource(), "chaos")))
                     .then(Commands.literal("on").executes(ctx -> setQuirkFlag(ctx.getSource(), true)))
                     .then(Commands.literal("off").executes(ctx -> setQuirkFlag(ctx.getSource(), false))))
+                .then(Commands.literal("follow")
+                    .executes(ctx -> followInfo(ctx.getSource()))
+                    .then(Commands.argument("distance", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(2.0D, 24.0D))
+                        .executes(ctx -> setFollow(ctx.getSource(),
+                            com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(ctx, "distance")))))
                 .then(Commands.literal("skills").executes(ctx -> skills(ctx.getSource())))
                 .then(Commands.literal("gui").executes(ctx -> openGui(ctx.getSource())))
                 .then(Commands.literal("skill").requires(src -> src.hasPermission(2))
@@ -1020,10 +1029,36 @@ public class SuperCowMod implements ModInitializer {
             src.sendSuccess(new TextComponent("\u00A7e/supercow summonmode <follow|aggressive|defensive|guard>"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow attack <arrow|fireball|potion|firework|chicken|music|exploding_cow|summon>"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow skills \u00A77- \u5217\u51FA\u6280\u80FD\u8868\u4E0E\u6D3B\u52A8\u6280\u80FD\u5B9E\u4F53\u6570"), false);
+            src.sendSuccess(new TextComponent("\u00A7e/supercow follow <2-24> \u00A77- \u8C03\u8DDF\u968F\u8DDD\u79BB\uFF08\u9ED8\u8BA4 10 \u683C\uFF09"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow gui \u00A77- \u6253\u5F00\u5BA0\u7269\u9762\u677F\uFF08\u4E5F\u53EF\u7A7A\u624B\u53F3\u952E\u5BA0\u7269\u725B\uFF09"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow skill <name> \u00A77- \u5F3A\u5236\u91CA\u653E\u4E00\u4E2A\u6280\u80FD (\u9700\u6743\u96502)"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow heal \u00A77- \u6CBB\u7597\u5BA0\u7269\u725B"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow quirk <safe|mixed|chaos> \u00A77- \u4FEE\u590D\u7248/\u6DF7\u5408/\u539F\u7248BUG\u7248 (>\u6743\u96502)"), false);
+            return 1;
+        }
+
+        private static int followInfo(CommandSourceStack src) {
+            SuperCowConfig cfg = mod().getConfig();
+            String line = "\u00A7e\u8DDF\u968F\u8303\u56F4\uFF1A\u00A7f"
+                + String.format("%.1f", cfg.followDistance)
+                + " \u00A77\u683C\uFF08" + net.dabbit.supercow.gui.PetGui.followRangeLabel(cfg)
+                + "\uFF09\u00A78 \u7528 /supercow follow <2-24> \u6216\u9762\u677F\u8C03\u6574";
+            src.sendSuccess(new TextComponent(line), false);
+            return 1;
+        }
+
+        private static int setFollow(CommandSourceStack src, double distance) {
+            SuperCowConfig cfg = mod().getConfig();
+            cfg.followDistance = net.dabbit.supercow.gui.PetGui.clampFollow(distance);
+            mod().saveConfigFile();
+            ServerPlayer p = player(src);
+            String msg = "\u00A7b\u8DDF\u968F\u8303\u56F4\u5DF2\u8BBE\u4E3A \u00A7f"
+                + String.format("%.1f", cfg.followDistance) + " \u00A77\u683C";
+            if (p != null) {
+                p.sendMessage(new TextComponent(msg), p.getUUID());
+            } else {
+                src.sendSuccess(new TextComponent(msg), true);
+            }
             return 1;
         }
 
