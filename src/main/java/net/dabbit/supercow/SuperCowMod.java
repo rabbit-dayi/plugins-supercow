@@ -17,7 +17,10 @@ import java.util.UUID;
 import net.dabbit.supercow.combat.CombatManager;
 import net.dabbit.supercow.combat.CombatManager.PetMode;
 import net.dabbit.supercow.combat.MinionManager;
+import net.dabbit.supercow.combat.QuirkSkills;
 import net.dabbit.supercow.combat.SkillCleanup;
+import net.dabbit.supercow.combat.Skills;
+import net.dabbit.supercow.gui.PetGui;
 import net.dabbit.supercow.combat.SpecialAttackManagers;
 import net.dabbit.supercow.combat.SummonManager;
 import net.dabbit.supercow.combat.SummonManager.SummonMode;
@@ -147,6 +150,13 @@ public class SuperCowMod implements ModInitializer {
         ServerPlayConnectionEvents.DISCONNECT.register((handler, srv) -> {
             ServerPlayer player = handler.player;
             if (player != null) {
+                // FIXED LEAK: combat state (targets, glowing, summons, minions, tracked skill
+                // entities) used to survive a logout, so a pet with no online owner kept the
+                // glowing target and leftover helper entities around until the server restarted.
+                UUID uuid = player.getUUID();
+                Cow pet = getActivePet(uuid);
+                combatManager.onPetRemovedOrDied(uuid, pet);
+                SkillCleanup.cleanupForOwner(uuid);
                 savePets();
             }
         });
@@ -248,43 +258,59 @@ public class SuperCowMod implements ModInitializer {
         if (world.isClientSide || !(player instanceof ServerPlayer) || !(entity instanceof Cow)) {
             return InteractionResult.PASS;
         }
-        ServerPlayer sp = (ServerPlayer) player;
-        Cow cow = (Cow) entity;
+        return handleCowRightClick((ServerPlayer) player, (Cow) entity, hand)
+            ? InteractionResult.SUCCESS
+            : InteractionResult.PASS;
+    }
+
+    /**
+     * Shared right-click handler used by the Fabric UseEntityCallback and by our own
+     * ServerGamePacketListenerImpl mixin. Returns true when the interaction was consumed,
+     * i.e. the packet should be cancelled so vanilla cow behaviour does not also run.
+     */
+    public boolean handleCowRightClick(ServerPlayer sp, Cow cow, InteractionHand hand) {
         ItemStack held = sp.getItemInHand(hand);
         boolean isPet = cow.getTags().contains(TAG_PET);
         UUID ownerUuid = sp.getUUID();
 
         if (!isPet) {
             if (held.getItem() != Items.HAY_BLOCK) {
-                return InteractionResult.PASS;
+                return false;
             }
             PetData existing = petDataByOwner.get(ownerUuid);
             if (existing != null && existing.isAlive && getActivePet(ownerUuid) != null) {
                 sp.sendMessage(new TextComponent("\u00A7c[\u8D85\u7EA7\u725B] \u4F60\u5DF2\u7ECF\u6709\u4E00\u53EA\u5BA0\u7269\u725B\u4E86\uFF01"), ownerUuid);
-                return InteractionResult.FAIL;
+                return true;
             }
             if (Math.random() > config.tameChance) {
                 sp.sendMessage(new TextComponent("\u00A7e[\u8D85\u7EA7\u725B] \u8FD9\u53EA\u725B\u8FD8\u4E0D\u613F\u610F\u8DDF\u968F\u4F60\uFF0C\u518D\u8BD5\u8BD5\u5427\uFF01"), ownerUuid);
-                return InteractionResult.CONSUME;
+                return true;
             }
             tame(sp, cow);
-            return InteractionResult.SUCCESS;
+            return true;
         }
 
         // Existing pet interaction
         UUID petOwner = getOwnerOfPetEntity(cow);
         if (petOwner == null) {
-            return InteractionResult.PASS;
+            return false;
         }
         if (!petOwner.equals(ownerUuid)) {
             sp.sendMessage(new TextComponent("\u00A7c[\u8D85\u7EA7\u725B] \u8FD9\u662F\u522B\u4EBA\u7684\u5BA0\u7269\u725B\uFF01"), ownerUuid);
-            return InteractionResult.FAIL;
+            return true;
         }
         if (held.getItem() == Items.HAY_BLOCK) {
-            return onFeedHay(sp, cow, petOwner);
+            onFeedHay(sp, cow, petOwner);
+            return true;
+        }
+        // Empty-hand right-click opens the chest GUI; sneaking keeps the plain text info dump.
+        if (config.petGuiEnabled && !sp.isShiftKeyDown()
+            && (!config.petGuiNeedsEmptyHand || held.isEmpty())) {
+            PetGui.open(sp, cow, petOwner);
+            return true;
         }
         showPetInfo(sp, cow, petOwner);
-        return InteractionResult.SUCCESS;
+        return true;
     }
 
     private InteractionResult onFeedHay(ServerPlayer sp, Cow cow, UUID ownerUuid) {
@@ -704,6 +730,7 @@ public class SuperCowMod implements ModInitializer {
         combatManager.tick();
         summonManager.tick();
         MinionManager.tickAll();
+        QuirkSkills.tickAll();
         SpecialAttackManagers.tickAll();
         SkillCleanup.tick();
         pathfindingManager.tick();
@@ -846,24 +873,6 @@ public class SuperCowMod implements ModInitializer {
         }
     }
 
-    /** TEMP-SELFTEST helper. */
-    public java.util.Set<UUID> petDataKeysForTest() {
-        return new java.util.HashSet<>(petDataByOwner.keySet());
-    }
-
-    /** TEMP-SELFTEST helper. */
-    public String debugDumpForTest() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("dataKeys=").append(petDataByOwner.keySet());
-        sb.append(" activeKeys=").append(activePetByOwner.keySet());
-        Cow c = activePetByOwner.isEmpty() ? null : activePetByOwner.values().iterator().next();
-        if (c != null) {
-            sb.append(" petAlive=").append(c.isAlive()).append(" removed=").append(c.removed)
-              .append(" hp=").append(c.getHealth()).append(" uuid=").append(c.getUUID());
-        }
-        return sb.toString();
-    }
-
     public void reloadConfig() {
         config = SuperCowConfig.load(new File(configDir(), "supercow-config.json"));
     }
@@ -963,6 +972,7 @@ public class SuperCowMod implements ModInitializer {
                     .then(Commands.literal("on").executes(ctx -> setQuirkFlag(ctx.getSource(), true)))
                     .then(Commands.literal("off").executes(ctx -> setQuirkFlag(ctx.getSource(), false))))
                 .then(Commands.literal("skills").executes(ctx -> skills(ctx.getSource())))
+                .then(Commands.literal("gui").executes(ctx -> openGui(ctx.getSource())))
                 .then(Commands.literal("skill").requires(src -> src.hasPermission(2))
                     .then(Commands.literal("arrow").executes(ctx -> forceSkill(ctx.getSource(), "arrow")))
                     .then(Commands.literal("fireball").executes(ctx -> forceSkill(ctx.getSource(), "fireball")))
@@ -974,7 +984,17 @@ public class SuperCowMod implements ModInitializer {
                     .then(Commands.literal("summon").executes(ctx -> forceSkill(ctx.getSource(), "summon")))
                     .then(Commands.literal("summon_parrots").executes(ctx -> forceSkill(ctx.getSource(), "summon_parrots")))
                     .then(Commands.literal("summon_rabbits").executes(ctx -> forceSkill(ctx.getSource(), "summon_rabbits")))
-                    .then(Commands.literal("sky_spiral").executes(ctx -> forceSkill(ctx.getSource(), "sky_spiral")))));
+                    .then(Commands.literal("sky_spiral").executes(ctx -> forceSkill(ctx.getSource(), "sky_spiral")))
+                    .then(Commands.literal("cow_rain").executes(ctx -> forceSkill(ctx.getSource(), "cow_rain")))
+                    .then(Commands.literal("milk_bomb").executes(ctx -> forceSkill(ctx.getSource(), "milk_bomb")))
+                    .then(Commands.literal("moon_walk").executes(ctx -> forceSkill(ctx.getSource(), "moon_walk")))
+                    .then(Commands.literal("moo_wave").executes(ctx -> forceSkill(ctx.getSource(), "moo_wave")))
+                    .then(Commands.literal("hay_tornado").executes(ctx -> forceSkill(ctx.getSource(), "hay_tornado")))
+                    .then(Commands.literal("butterfly_swarm").executes(ctx -> forceSkill(ctx.getSource(), "butterfly_swarm")))
+                    .then(Commands.literal("zero_gravity").executes(ctx -> forceSkill(ctx.getSource(), "zero_gravity")))
+                    .then(Commands.literal("mirror_cow").executes(ctx -> forceSkill(ctx.getSource(), "mirror_cow")))
+                    .then(Commands.literal("teleport_swap").executes(ctx -> forceSkill(ctx.getSource(), "teleport_swap")))
+                    .then(Commands.literal("confetti").executes(ctx -> forceSkill(ctx.getSource(), "confetti")))));
         }
 
         private static ServerPlayer player(CommandSourceStack src) {
@@ -995,9 +1015,24 @@ public class SuperCowMod implements ModInitializer {
             src.sendSuccess(new TextComponent("\u00A7e/supercow summonmode <follow|aggressive|defensive|guard>"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow attack <arrow|fireball|potion|firework|chicken|music|exploding_cow|summon>"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow skills \u00A77- \u5217\u51FA\u6280\u80FD\u8868\u4E0E\u6D3B\u52A8\u6280\u80FD\u5B9E\u4F53\u6570"), false);
+            src.sendSuccess(new TextComponent("\u00A7e/supercow gui \u00A77- \u6253\u5F00\u5BA0\u7269\u9762\u677F\uFF08\u4E5F\u53EF\u7A7A\u624B\u53F3\u952E\u5BA0\u7269\u725B\uFF09"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow skill <name> \u00A77- \u5F3A\u5236\u91CA\u653E\u4E00\u4E2A\u6280\u80FD (\u9700\u6743\u96502)"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow heal \u00A77- \u6CBB\u7597\u5BA0\u7269\u725B"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow quirk <safe|mixed|chaos> \u00A77- \u4FEE\u590D\u7248/\u6DF7\u5408/\u539F\u7248BUG\u7248 (>\u6743\u96502)"), false);
+            return 1;
+        }
+
+        private static int openGui(CommandSourceStack src) {
+            ServerPlayer p = player(src);
+            if (p == null) {
+                return 0;
+            }
+            Cow pet = mod().getActivePet(p.getUUID());
+            if (pet == null || !pet.isAlive()) {
+                p.sendMessage(new TextComponent("\u00A7c[\u8D85\u7EA7\u725B] \u4F60\u6CA1\u6709\u5B58\u6D3B\u7684\u5BA0\u7269\u725B\u3002"), p.getUUID());
+                return 0;
+            }
+            PetGui.open(p, pet, p.getUUID());
             return 1;
         }
 
@@ -1014,6 +1049,16 @@ public class SuperCowMod implements ModInitializer {
             p.sendMessage(new TextComponent("\u00A77\u8F6C\u5708\u98DE\u5929\uFF1A\u00A7f\u8FFD\u51FB\u65F6 \u00A7e"
                 + String.format("%.0f%%", mod().getConfig().skySpiralChance * 100.0D)
                 + " \u00A77\u89E6\u53D1 \u00A78(\u5F3A\u5236\uFF1A/supercow skill sky_spiral)"), owner);
+            int enabledCount = 0;
+            for (Skills.Skill sk : Skills.all()) {
+                if (mod().getConfig().isSkillEnabled(sk.id)) {
+                    enabledCount++;
+                }
+            }
+            p.sendMessage(new TextComponent("\u00A77\u62BD\u89C9\u6280\u80FD\uFF1A\u00A7f" + enabledCount + "/" + Skills.all().size()
+                + " \u00A77\u5DF2\u5F00\u542F \u00A78(\u53F3\u952E\u5BA0\u7269\u725B\u6253\u5F00\u9762\u677F\u5F00\u5173)"), owner);
+            p.sendMessage(new TextComponent("\u00A77\u65B0\u6280\u80FD\uFF1A\u00A7fcow_rain milk_bomb moon_walk moo_wave hay_tornado"), owner);
+            p.sendMessage(new TextComponent("\u00A77          \u00A7fbutterfly_swarm zero_gravity mirror_cow teleport_swap confetti"), owner);
             p.sendMessage(new TextComponent("\u00A77\u98CE\u683C\uFF1A\u00A7f" + net.dabbit.supercow.combat.Quirks.describe()
                 + " \u00A77(safe=\u5168\u4FEE\u590D\u7248 / mixed=\u6DF7\u5408 / chaos=\u5168BUG\u7248)"), owner);
             p.sendMessage(new TextComponent("\u00A77\u6D3B\u52A8\u6280\u80FD\u5B9E\u4F53\uFF1A\u00A7f" + SkillCleanup.countForOwner(owner)
@@ -1030,6 +1075,11 @@ public class SuperCowMod implements ModInitializer {
             Cow pet = m.getActivePet(p.getUUID());
             if (pet == null || !(p.level instanceof ServerLevel)) {
                 p.sendMessage(new TextComponent("\u00A7c[\u8D85\u7EA7\u725B] \u4F60\u6CA1\u6709\u5B58\u6D3B\u7684\u5BA0\u7269\u725B\u3002"), p.getUUID());
+                return 0;
+            }
+            if (!m.getConfig().isSkillEnabled(skill)) {
+                p.sendMessage(new TextComponent("\u00A7c[\u8D85\u7EA7\u725B] \u6280\u80FD \u00A7f" + skill
+                    + " \u00A7c\u5DF2\u88AB\u5173\u95ED\uFF0C\u53EF\u5728\u9762\u677F\u4E2D\u5F00\u542F\u3002"), p.getUUID());
                 return 0;
             }
             boolean ok = m.getCombatManager().forceSkill((ServerLevel) p.level, p.getUUID(), skill);

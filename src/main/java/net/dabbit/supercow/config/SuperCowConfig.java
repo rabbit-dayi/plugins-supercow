@@ -197,6 +197,29 @@ public class SuperCowConfig {
     public double skySpiralSpinSpeed = 0.35;     // 每 tick 转多少弧度（转圈的手感）
     public int skySpiralCooldownTicks = 900;     // 一次飞天之后 45 秒内不再触发
 
+    // ---------------------------------------------------------------------------------
+    // 母牛箱子 GUI（右键宠物牛）与技能开关
+    // ---------------------------------------------------------------------------------
+    public boolean petGuiEnabled = true;         // 右键宠物牛打开箱子界面
+    public boolean petGuiNeedsEmptyHand = false;  // 需要空手（拿干草块右键仍然是喂食）
+    /** skillId -> 是否启用；缺省视为启用 */
+    public java.util.Map<String, Boolean> skillEnabled = new java.util.LinkedHashMap<>();
+
+    // 十个"抽象"技能（伤害全部压低，数值风格与现有技能一致）
+    public int cowRainCount = 3;                 // 奶牛雨的牛数量
+    public double cowRainDamage = 2.0;
+    public double milkBombDamage = 0.5;
+    public int milkBombSlownessTicks = 100;
+    public double mooWaveDamage = 1.0;
+    public double mooWaveKnockback = 0.35;
+    public double hayTornadoDamage = 0.4;
+    public double butterflyDamage = 0.5;
+    public int butterflyCount = 3;
+    public double zeroGravityLift = 0.22;
+    public double teleportSwapDamage = 1.5;
+    public double confettiDamage = 0.5;
+    public int quirkSkillDurationTicks = 80;     // 这批抽象技能的持续时间（4 秒）
+
     public static SuperCowConfig load(File file) {
         if (file.exists()) {
             try (FileReader reader = new FileReader(file)) {
@@ -211,6 +234,32 @@ public class SuperCowConfig {
         SuperCowConfig config = new SuperCowConfig();
         config.save(file);
         return config;
+    }
+
+    /** 技能是否启用（缺省全部启用；sky_spiral 走自己的开关） */
+    public boolean isSkillEnabled(String skillId) {
+        if (skillId == null) {
+            return false;
+        }
+        if ("sky_spiral".equals(skillId)) {
+            return skySpiralEnabled;
+        }
+        Boolean v = skillEnabled != null ? skillEnabled.get(skillId) : null;
+        return v == null || v;
+    }
+
+    public void setSkillEnabled(String skillId, boolean enabled) {
+        if (skillId == null) {
+            return;
+        }
+        if ("sky_spiral".equals(skillId)) {
+            skySpiralEnabled = enabled;
+            return;
+        }
+        if (skillEnabled == null) {
+            skillEnabled = new java.util.LinkedHashMap<>();
+        }
+        skillEnabled.put(skillId, enabled);
     }
 
     public void save(File file) {

@@ -154,6 +154,15 @@ public class CombatManager {
         if (prev != null && prev.isAlive()) {
             prev.setGlowing(false);
         }
+        // FIXED LEAK: the per-target guard maps were never pruned, so every entity the pet ever
+        // attacked stayed referenced (tick snapshots, stuck timers, blacklist entries) forever.
+        if (prev != null) {
+            UUID id = prev.getUUID();
+            targetTickSnapshots.remove(id);
+            targetStuckSinceTick.remove(id);
+            untickableTargets.remove(id);
+            untickableSnapshots.remove(id);
+        }
     }
 
     public boolean isInRageMode(UUID ownerUuid) {
@@ -373,25 +382,34 @@ public class CombatManager {
     // launch an exploding cow and a long-range pet could start a music attack. That unpredictability
     // is restored here; the distance pools below remain as a fallback when the legacy table is off.
     // -------------------------------------------------------------------------------------------
-    private static final String[] SKILL_NAMES = {
-        "arrow", "firework", "potion", "fireball", "exploding_cow",
-        "chicken", "music", "summon", "summon_parrots", "summon_rabbits"
-    };
-    private static final int[] SKILL_WEIGHTS_NORMAL = {950, 15, 15, 5, 5, 3, 3, 2, 1, 1};
-    private static final int[] SKILL_WEIGHTS_RAGE = {900, 30, 30, 15, 10, 5, 5, 2, 2, 1};
-
+    // The table itself lives in Skills (weights normal/rage). Only "rollable" skills take part:
+    // sky_spiral is exclusive to its own trigger, and anything the owner disabled in the GUI is
+    // skipped, so a switched-off skill can never be drawn.
     private String rollWeightedSkill(boolean rage) {
-        int[] weights = rage ? SKILL_WEIGHTS_RAGE : SKILL_WEIGHTS_NORMAL;
+        SuperCowConfig cfg = mod.getConfig();
+        java.util.List<Skills.Skill> pool = new java.util.ArrayList<>();
         int total = 0;
-        for (int w : weights) {
+        for (Skills.Skill skill : Skills.all()) {
+            if (!skill.rollable || !cfg.isSkillEnabled(skill.id)) {
+                continue;
+            }
+            int w = rage ? skill.weightRage : skill.weightNormal;
+            if (w <= 0) {
+                continue;
+            }
+            pool.add(skill);
             total += w;
         }
+        if (total <= 0) {
+            return "arrow";
+        }
         int roll = random.nextInt(total);
-        for (int i = 0; i < weights.length; i++) {
-            if (roll < weights[i]) {
-                return SKILL_NAMES[i];
+        for (Skills.Skill skill : pool) {
+            int w = rage ? skill.weightRage : skill.weightNormal;
+            if (roll < w) {
+                return skill.id;
             }
-            roll -= weights[i];
+            roll -= w;
         }
         return "arrow";
     }
@@ -478,8 +496,13 @@ public class CombatManager {
                     return true;
                 }
                 return false;
-            default:
+            default: {
+                String quirkId = skillName.toLowerCase();
+                if (QuirkSkills.isQuirkSkill(quirkId)) {
+                    return QuirkSkills.cast(level, pet, ownerUuid, target, rage, owner, quirkId);
+                }
                 return false;
+            }
         }
     }
 
@@ -536,6 +559,8 @@ public class CombatManager {
         summonManager.cleanupSummonsForOwner(ownerUuid);
         MinionManager.cleanupForOwner(ownerUuid);
         SpecialAttackManagers.cleanupForOwner(ownerUuid);
+        SkillCleanup.cleanupForOwner(ownerUuid);
+        QuirkSkills.cleanupForOwner(ownerUuid);
     }
 
     /** Used by /supercow skill <name>: fire one specific skill at the current (or nearest) target. */

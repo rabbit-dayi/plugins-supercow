@@ -3,7 +3,8 @@
   "package": "net.dabbit.supercow.mixin",
   "compatibilityLevel": "JAVA_8",
   "mixins": [
-    "LivingEntityMixin"
+    "LivingEntityMixin",
+    "ServerGamePacketListenerMixin"
   ],
   "injectors": {
     "defaultRequire": 1

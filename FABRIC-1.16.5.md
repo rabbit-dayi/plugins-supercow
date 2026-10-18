@@ -153,6 +153,69 @@
 
 `/supercow skills` 会显示当前风格，例如 `风格：mixed 50%`，以及转圈飞天的当前触发概率。
 
+## 宠物牛面板（箱子 GUI）
+
+对自己存活的宠物牛**右键**即可打开一个 54 格箱子面板（标题 `§6§l超级牛 · 面板`）。
+拿着干草块右键仍然是喂食、潜行右键仍然是文字信息，不会被面板抢走。
+如果在面板里改了东西，关闭面板时统一写盘（`removed(Player)` 里保存），不会每点一下就刷磁盘。
+
+| 槽位 | 物品 | 作用 |
+| --- | --- | --- |
+| 0 | 生牛刷怪蛋 | 名字 = `§6§l超级牛 §eLv.N`，lore 显示生命 / 经验 / 击杀 / 模式 |
+| 1 | 附魔之瓶 | 技能总开关数量（已启用 N/M） |
+| 2 | 金苹果 | 当前生命 / 最大生命 |
+| 3 | 书 | 经验进度（`x/y`，下一级所需） |
+| 4 | 盾牌 | 战斗模式（保护 / 主动 / 防御 / 被动），点击循环 |
+| 5 | 小麦 | 召唤模式（跟随 / 主动 / 防御 / 守卫），点击循环 |
+| 6 | 酿造台 | 技能风格（safe / mixed / chaos），点击循环并启用怪癖系统 |
+| 9~29 | 染料 | 21 个技能各一格：`§a✔` 开 / `§7✘` 关，点击切换 |
+| 36 | 金胡萝卜 | 治疗宠物到满血 |
+| 37 | 拴绳 | 召回（关闭面板 + `recallPet`） |
+| 38 | 末影之眼 | 把宠物传送到主人身边 |
+| 39 / 40 | 黄绿 / 灰色染料 | 一键全开 / 全关 |
+| 53 | 屏障 | 关闭面板 |
+| 其余 | 灰色玻璃板 | 占位 |
+
+实现要点（都是踩过的坑）：
+
+- **同步包**：面板是 `SimpleContainer` + 自定义 `ChestMenu`，每次点击后自己构造
+  `ClientboundContainerSetContentPacket`（90 = 54 容器格 + 玩家背包 27 + 快捷栏 9）重推一遍，
+  客户端不会出现"点了没反应"的鬼影物品。
+- **点击必须重新解锁同步**：1.16.5 的 `ServerGamePacketListenerImpl.handleContainerClick` 在
+  `ItemStack.matches` 失败时会 `setSynched(player, false)`，之后 `handleContainerClick` 直接 return。
+  所以 `clicked()` 末尾一定要 `setSynched(sp, true)`，否则面板只接受**一次**点击就彻底失灵。
+- **面板只吃自己的格子**：`slotId in [0,54) && sp.containerMenu == this` 才处理，玩家背包半区
+  的点击原样放过（不会吞物品、不会复制）。
+- **打开方式走自己的 mixin**：本服的 fabric-api 0.42 里 `UseEntityCallback` 不触发
+  （`MixinServerPlayNetworkHandler` 在这台服务器上是哑的，实测右键牛奶桶能挤奶但事件不回调），
+  因此新增 `mixin/ServerGamePacketListenerMixin`：在 `ServerGamePacketListenerImpl.handleInteract`
+  的 `HEAD` 读 `ServerboundInteractPacket`，`Action.INTERACT` + `Cow` 才交给
+  `SuperCowMod.handleCowRightClick`，被消费时 `ci.cancel()`。
+- `stillValid`：主人 UUID 匹配、宠物存活、距离 ≤ 24 格，否则面板自动关闭。
+
+## 十个"抽象"技能（quirk skills）
+
+在原来 10 个技能之外再加 10 个（合计 21 个，面板里每一个都能单独开关，权重都是 8 / 14）：
+
+| id | 名称 | 表现 |
+| --- | --- | --- |
+| `cow_rain` | 奶牛雨 | 天上掉下 3 只（狂暴 4 只）无 AI 的牛砸目标，每只 2.0 伤害，落地化作烟 |
+| `milk_bomb` | 牛奶炸弹 | 抛物投出，落点清除目标增益 + 缓慢，伤害很低 |
+| `moon_walk` | 月球漫步 | 宠物自己获得跳跃提升 / 缓降 / 速度，一路弹跳 4 秒 |
+| `moo_wave` | 哞叫波 | 两圈扩散音波把周围怪物推开 |
+| `hay_tornado` | 干草旋风 | 干草粒子绕着目标转，把怪物慢慢吸向中心 |
+| `butterfly_swarm` | 蝴蝶群 | 3 只蝙蝠围着目标乱飞，隔一会儿舔一下 |
+| `zero_gravity` | 零重力 | 附近怪物（连宠物自己）一起飘起来 |
+| `mirror_cow` | 镜像牛 | 刷一只无敌假牛吸引仇恨，时间到就散 |
+| `teleport_swap` | 换位 | 宠物和目标的坐标瞬间对调 |
+| `confetti` | 彩纸爆炸 | 一堆烟花粒子，伤害低、很吵 |
+
+- 全部通过 `/supercow skill <id>` 可以强制释放（无视权重与冷却，但仍受"技能开关"约束：
+  面板里关掉的技能，强制释放会提示 `§c已被关闭，可在面板中开启。`）。
+- 持续时间统一由 `quirkSkillDurationTicks`（默认 80 tick = 4 秒）控制；刷出来的实体全部登记进
+  `SkillCleanup`，宠物死亡 / 召回 / 主人下线时连同 `QuirkSkills.cleanupForOwner` 一起清空。
+- 数值都按"保守"取：这批技能总伤害远低于箭矢，属于趣味技能。
+
 ## 数值（全部按"保守"取向下调）
 
 | 项 | 原插件 | 本移植版 |
@@ -176,6 +239,17 @@
 - **冻结尸体清理**：被打死但永远不播放死亡动画的实体（`deathTime` 卡住 40 tick）会被主动移除，
   防止尸体永久占位（掉落物在 `die()` 阶段已经生成，移除不影响掉落）。
 
+- **面板点击不再"一点就死"**：`PetGui.clicked` 处理所有 `ClickType`，并在末尾 `setSynched(sp, true)`；
+  面板关闭时（`removed(Player)`）才写配置，避免每次点击刷盘。
+- **技能实体随主人清理**：`QuirkSkills.cleanupForOwner` 现在同时调用 `SkillCleanup.cleanupForOwner`，
+  宠物死亡 / 召回 / 主人下线时，奶牛雨的牛、蝴蝶群的蝙蝠、镜像牛都不会留在世界里。
+- **AoE 白名单只看真目标**：`nearby(...)` 拆分出带 `explicitTarget` 的重载，只有真正的技能目标
+  才享受"无视 Monster 判定"的旁路（之前误把宠物自己当目标传进去，等于白名单恒真）。
+- **换目标的记忆表不再泄漏**：`clearTarget` 会移除 `targetTickSnapshots` / `targetStuckSinceTick` /
+  `untickableTargets` / `untickableSnapshots` 中该目标的记录。
+- **玩家断线清理战斗态**：`DISCONNECT` 里除了存盘，还会 `onPetRemovedOrDied` + `SkillCleanup.cleanupForOwner`。
+- **tick 计数器用 long**：`QuirkSkills.Task.startTick/endTick` 改为 `long`，长时间运行不会溢出。
+
 ## 测试记录（/opt/hf/final-paradox-test-1.16.5）
 
 - 启动日志：`[SuperCow] Fabric 1.16.5 port initialized.` → `Done (2.576s)!`
@@ -184,6 +258,17 @@
   近战 3.0 伤害对 2 点护甲的僵尸结算为 2.94（符合 1.16.5 护甲公式），箭矢 2.5 伤害，
   击杀计数 +1 / 经验 +10，生命 60/60 并持续回血，宠物死亡后 120 秒自动复活。
 - 日志中除世界自带的 `Couldn't load advancement` 之外无任何 Exception / ERROR。
+- 面板（GUI）：`/supercow gui` 与右键打开，标题 `§6§l超级牛 · 面板`、90 格（54 + 36）；
+  点技能格 9 在 `§7✘ 箭矢` ↔ `§a✔ 箭矢` 之间切换，点"全开"格 39 后槽 9 变为 `§a✔`，
+  点玩家背包半区（槽 54）不产生任何变化、手持牛奶桶不变（无复制/无鬼影），点屏障格 53 正常关闭。
+  切换后 `config/supercow-config.json` 的 `skillEnabled` / `quirkMode` 落盘正确。
+- 十个抽象技能逐个强制释放（`/supercow skill <id>`）：奶牛雨当场刷出 4 只牛并砸死僵尸、
+  哞叫波/干草旋风击杀僵尸并掉经验球、蝴蝶群刷 3 只蝙蝠、镜像牛让牛的计数 1→2、彩纸爆炸把克隆牛收走；
+  释放后服务器日志除世界自带的 `Couldn't load advancement` 外无任何 Exception。
+- 面板点击在客户端的视角会显示 `Server rejected transaction`（vanilla 的 ack/重同步路径），
+  服务端状态是正确的，属于预期日志。
+
+
 
 ## 击杀归属：宠物击杀算作玩家击杀
 
