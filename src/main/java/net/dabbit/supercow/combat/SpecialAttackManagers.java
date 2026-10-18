@@ -171,6 +171,16 @@ public final class SpecialAttackManagers {
             double horizDist = Math.sqrt(dir.x * dir.x + dir.z * dir.z);
             arrow.shoot(dir.x, dir.y + horizDist * 0.18D, dir.z, (float) cfg.arrowSpeed, (float) (cfg.arrowSpread + i * 2.0D));
             level.addFreshEntity(arrow);
+            SkillCleanup.track(arrow, ownerUuid, 200, "arrow");
+        }
+        // Original plugin quirk kept as a skill: every arrow volley healed the cow a little
+        // (ArrowConfig.HEAL_AMOUNT was 2.5; the port keeps a smaller 1.0 so it stays balanced).
+        if (cfg.legacyQuirksEnabled && cfg.arrowHealAmount > 0.0D && shooterCow != null && shooterCow.isAlive()) {
+            float maxHealth = shooterCow.getMaxHealth();
+            if (shooterCow.getHealth() < maxHealth) {
+                shooterCow.setHealth((float) Math.min(maxHealth, shooterCow.getHealth() + cfg.arrowHealAmount));
+                level.sendParticles(ParticleTypes.HEART, shooterCow.getX(), shooterCow.getY() + 1.3D, shooterCow.getZ(), 2, 0.3D, 0.3D, 0.3D, 0.02D);
+            }
         }
         level.playSound(null, shooterCow.getX(), shooterCow.getY(), shooterCow.getZ(), SoundEvents.ARROW_SHOOT, SoundSource.NEUTRAL, 0.8F, 1.0F);
     }
@@ -472,6 +482,7 @@ public final class SpecialAttackManagers {
                 chicken.addTag("supercow_owner:" + ownerUuid.toString());
             }
             level.addFreshEntity(chicken);
+            SkillCleanup.track(chicken, ownerUuid, cfg.bombardmentDurationTicks + 60, "bomber_chicken");
             chickens.add(chicken);
         }
 
@@ -537,6 +548,7 @@ public final class SpecialAttackManagers {
                     Vec3 dir = target.position().add(0.0D, target.getBbHeight() * 0.5D, 0.0D).subtract(nx, ny - 0.3D, nz);
                     egg.shoot(dir.x, dir.y, dir.z, 0.8F, 1.5F);
                     level.addFreshEntity(egg);
+                    SkillCleanup.track(egg, ownerUuid, 200, "egg");
                     level.playSound(null, nx, ny, nz, SoundEvents.CHICKEN_EGG, SoundSource.NEUTRAL, 0.6F, 1.0F);
                 }
             }
@@ -549,6 +561,7 @@ public final class SpecialAttackManagers {
                     level.sendParticles(ParticleTypes.CLOUD, chicken.getX(), chicken.getY(), chicken.getZ(), 4, 0.2D, 0.2D, 0.2D, 0.02D);
                     chicken.remove();
                 }
+                SkillCleanup.untrack(chicken);
             }
             chickens.clear();
         }
@@ -620,16 +633,27 @@ public final class SpecialAttackManagers {
                         continue;
                     }
                     entity.hurt(src, dmg);
-                    entity.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, cfg.musicDebuffTicks, 0));
-                    if (rageMode) {
-                        entity.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, cfg.musicDebuffTicks, 0));
+
+                    // Quirk kept as a skill: the original applied the debuffs to everyone EXCEPT the
+                    // primary target, so the crowd around the pet gets slowed/weakened while the main
+                    // target walks away clean. Damage is still dealt normally to all valid targets.
+                    boolean isPrimaryTarget = target != null && entity.getUUID().equals(target.getUUID());
+                    boolean invertDebuffs = cfg.legacyQuirksEnabled && cfg.musicInvertedTargeting;
+                    if (!invertDebuffs || !isPrimaryTarget) {
+                        entity.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, cfg.musicDebuffTicks, 0));
+                        if (rageMode) {
+                            entity.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, cfg.musicDebuffTicks, 0));
+                        }
                     }
 
-                    // FIXED BUG 2: Original had entity.location.subtract(entity.location).normalize() -> NaN!
-                    Vec3 away = entity.position().subtract(shooterCow.position());
-                    if (away.lengthSqr() > 1.0E-4D) {
-                        Vec3 kb = away.normalize().scale(cfg.musicKnockback);
-                        entity.setDeltaMovement(entity.getDeltaMovement().add(kb.x, 0.1D, kb.z));
+                    // Quirk kept as a skill: the original knockback vector was (loc - loc) = zero, so
+                    // the "knockback" never pushed anything anywhere. No NaN, simply no shove.
+                    if (!(cfg.legacyQuirksEnabled && cfg.musicZeroKnockback)) {
+                        Vec3 away = entity.position().subtract(shooterCow.position());
+                        if (away.lengthSqr() > 1.0E-4D) {
+                            Vec3 kb = away.normalize().scale(cfg.musicKnockback);
+                            entity.setDeltaMovement(entity.getDeltaMovement().add(kb.x, 0.1D, kb.z));
+                        }
                     }
                 }
             }
@@ -657,6 +681,7 @@ public final class SpecialAttackManagers {
             bombCow.addTag("supercow_owner:" + ownerUuid.toString());
         }
         level.addFreshEntity(bombCow);
+        SkillCleanup.track(bombCow, ownerUuid, cfg.explodingCowMaxLifetimeTicks + 40, "exploding_cow");
 
         ACTIVE_EXPLODING_COWS.add(new ExplodingCowTask(level, shooterCow, ownerUuid, bombCow, target, rageMode, cfg));
         level.playSound(null, start.x, start.y, start.z, SoundEvents.COW_HURT, SoundSource.NEUTRAL, 0.8F, 1.4F);
@@ -754,6 +779,7 @@ public final class SpecialAttackManagers {
             if (bombCow != null && !bombCow.removed) {
                 bombCow.remove();
             }
+            SkillCleanup.untrack(bombCow);
         }
     }
 }

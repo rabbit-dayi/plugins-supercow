@@ -354,7 +354,7 @@ public class CombatManager {
         double specialProb = rage ? cfg.rageSpecialAttackChance : cfg.specialAttackChance;
 
         if (canSpecial && random.nextDouble() < specialProb) {
-            String chosen = chooseSpecialAttackByDistance(dist, cfg);
+            String chosen = cfg.legacySkillsEnabled ? rollWeightedSkill(rage) : chooseSpecialAttackByDistance(dist, cfg);
             lastSpecialAttackTick.put(ownerUuid, nowTick);
             executeNamedAttack(level, ownerUuid, pet, owner, target, chosen, rage, false);
             return;
@@ -365,6 +365,35 @@ public class CombatManager {
         } else {
             SpecialAttackManagers.shootArrows(level, pet, ownerUuid, target, rage);
         }
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Original skill table (CombatManager.kt:549-657). The Bukkit plugin did NOT pick a skill by
+    // range: it rolled a single weighted table for every attack, so a close-range pet could still
+    // launch an exploding cow and a long-range pet could start a music attack. That unpredictability
+    // is restored here; the distance pools below remain as a fallback when the legacy table is off.
+    // -------------------------------------------------------------------------------------------
+    private static final String[] SKILL_NAMES = {
+        "arrow", "firework", "potion", "fireball", "exploding_cow",
+        "chicken", "music", "summon", "summon_parrots", "summon_rabbits"
+    };
+    private static final int[] SKILL_WEIGHTS_NORMAL = {950, 15, 15, 5, 5, 3, 3, 2, 1, 1};
+    private static final int[] SKILL_WEIGHTS_RAGE = {900, 30, 30, 15, 10, 5, 5, 2, 2, 1};
+
+    private String rollWeightedSkill(boolean rage) {
+        int[] weights = rage ? SKILL_WEIGHTS_RAGE : SKILL_WEIGHTS_NORMAL;
+        int total = 0;
+        for (int w : weights) {
+            total += w;
+        }
+        int roll = random.nextInt(total);
+        for (int i = 0; i < weights.length; i++) {
+            if (roll < weights[i]) {
+                return SKILL_NAMES[i];
+            }
+            roll -= weights[i];
+        }
+        return "arrow";
     }
 
     private String chooseSpecialAttackByDistance(double dist, SuperCowConfig cfg) {
@@ -413,12 +442,33 @@ public class CombatManager {
                 SpecialAttackManagers.startMusicAttack(level, pet, ownerUuid, target, rage);
                 return true;
             case "exploding_cow":
-            case "explodingcow":
-                // FIXED BUG: original 1.19.4 code called shootPotion here.
-                SpecialAttackManagers.launchExplodingCow(level, pet, ownerUuid, target, rage);
+            case "explodingcow": {
+                SuperCowConfig cfg = mod.getConfig();
+                // Quirk kept as a skill: the original 1.19.4 dispatch for "exploding_cow" actually
+                // called shootPotion(), so one in five exploding cows is just a potion throw.
+                if (cfg.legacyQuirksEnabled && cfg.explodingCowPotionBugChance > 0.0D
+                    && random.nextDouble() < cfg.explodingCowPotionBugChance) {
+                    SpecialAttackManagers.shootPotion(level, pet, ownerUuid, target, rage);
+                } else {
+                    SpecialAttackManagers.launchExplodingCow(level, pet, ownerUuid, target, rage);
+                }
+                return true;
+            }
+            case "summon_parrots":
+            case "parrot":
+            case "parrots":
+                MinionManager.spawnParrots(level, owner, pet, target, rage);
+                return true;
+            case "summon_rabbits":
+            case "rabbit":
+            case "rabbits":
+                MinionManager.spawnRabbits(level, owner, pet, target, rage);
                 return true;
             case "summon":
-                return owner != null && summonManager.summonHelperCows(level, owner, pet, target, rage, manualCommand);
+                // Quirk kept as a skill: the original consumeHayBale() started with an unconditional
+                // "return true", so skill-triggered summons never paid for the hay bale. Only the
+                // manual /supercow attack summon charges the player.
+                return owner != null && summonManager.summonHelperCows(level, owner, pet, target, rage, !manualCommand);
             case "rage":
                 if (owner != null) {
                     triggerRageMode(ownerUuid, pet, owner);
@@ -481,7 +531,27 @@ public class CombatManager {
             pathfindingManager.stopPathfinding(pet);
         }
         summonManager.cleanupSummonsForOwner(ownerUuid);
+        MinionManager.cleanupForOwner(ownerUuid);
         SpecialAttackManagers.cleanupForOwner(ownerUuid);
+    }
+
+    /** Used by /supercow skill <name>: fire one specific skill at the current (or nearest) target. */
+    public boolean forceSkill(ServerLevel level, UUID ownerUuid, String skillName) {
+        Cow pet = mod.getActivePet(ownerUuid);
+        ServerPlayer owner = mod.getPlayer(ownerUuid);
+        if (pet == null || !pet.isAlive()) {
+            return false;
+        }
+        LivingEntity target = getCurrentTarget(ownerUuid);
+        if (target == null || !target.isAlive() || target.removed) {
+            target = owner != null ? mod.findNearestTarget(owner, pet) : null;
+        }
+        if (target == null) {
+            return false;
+        }
+        setTarget(ownerUuid, pet, target);
+        lastSpecialAttackTick.put(ownerUuid, mod.getServerTicks());
+        return executeNamedAttack(level, ownerUuid, pet, owner, target, skillName, false, true);
     }
 
     /** Periodic bookkeeping: drop targets whose pet or victim disappeared. */
@@ -504,7 +574,9 @@ public class CombatManager {
         lastSpecialAttackTick.clear();
         rageEndTick.clear();
         summonManager.cleanupAll();
+        MinionManager.cleanupAll();
         SpecialAttackManagers.cleanupAll();
+        SkillCleanup.cleanupAll();
         pathfindingManager.cleanupAll();
     }
 

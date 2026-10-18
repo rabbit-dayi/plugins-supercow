@@ -16,6 +16,8 @@ import java.util.Map;
 import java.util.UUID;
 import net.dabbit.supercow.combat.CombatManager;
 import net.dabbit.supercow.combat.CombatManager.PetMode;
+import net.dabbit.supercow.combat.MinionManager;
+import net.dabbit.supercow.combat.SkillCleanup;
 import net.dabbit.supercow.combat.SpecialAttackManagers;
 import net.dabbit.supercow.combat.SummonManager;
 import net.dabbit.supercow.combat.SummonManager.SummonMode;
@@ -334,6 +336,9 @@ public class SuperCowMod implements ModInitializer {
         cow.addTag(TAG_PET);
         cow.addTag(TAG_OWNER_PREFIX + ownerUuid.toString());
         cow.setPersistenceRequired();
+        // Legacy movement drives the pet by writing its velocity every tick; vanilla goals would
+        // fight that, so the pet runs with no AI while the original "abstract" mover is enabled.
+        cow.setNoAi(config.legacyMovementEnabled);
         cow.setCustomName(new TextComponent("\u00A76\u00A7l\u8D85\u7EA7\u725B \u00A7eLv." + data.level));
         cow.setCustomNameVisible(true);
         applyLevelStats(data, cow);
@@ -353,13 +358,48 @@ public class SuperCowMod implements ModInitializer {
         if (cow == null) {
             return null;
         }
-        double x = player.getX() + 1.5D;
-        double y = player.getY();
-        double z = player.getZ() + 1.5D;
-        cow.moveTo(x, y, z, player.yRot, 0.0F);
-        level.addFreshEntity(cow);
+        // Spawning at owner + 1.5 on a slab/platform can bury the cow half a block inside the
+        // terrain; a buried no-AI pet can never move because every travel step is blocked.
+        if (!placeAtFreeSpot(level, cow, player.getX() + 1.5D, player.getY(), player.getZ() + 1.5D, player.yRot)) {
+            cow.moveTo(player.getX() + 1.5D, player.getY(), player.getZ() + 1.5D, player.yRot, 0.0F);
+        }
+        double x = cow.getX();
+        double z = cow.getZ();
+        // The owner's chunk may still be loading when the pet is spawned (join / revive / recall).
+        // addFreshEntity() returns false in that case and the cow would stay a detached object that
+        // is invisible to mobs and to @e selectors, so force the chunk first and verify the add.
+        level.getChunk((int) Math.floor(x) >> 4, (int) Math.floor(z) >> 4);
+        if (!level.addFreshEntity(cow)) {
+            cow.remove();
+            return null;
+        }
         turnIntoPet(cow, data.ownerUuid, data);
         return cow;
+    }
+
+    /**
+     * Tries a handful of candidate positions around the owner and keeps the first one where the
+     * entity's bounding box does not intersect terrain. Without this a pet spawned onto a slab or
+     * into a wall stays buried and its velocity-driven movement never produces any displacement.
+     */
+    public static boolean placeAtFreeSpot(ServerLevel level, Entity entity, double x, double y, double z, float yRot) {
+        double[][] offsets = {
+            {1.5D, 0.0D}, {-1.5D, 0.0D}, {0.0D, 1.5D}, {0.0D, -1.5D},
+            {2.5D, 0.0D}, {0.0D, -2.5D}, {1.5D, 1.5D}, {-1.5D, -1.5D}, {0.0D, 0.0D}
+        };
+        double[] lifts = {0.0D, 1.0D, -0.5D, 0.5D};
+        for (double[] offset : offsets) {
+            for (double lift : lifts) {
+                double px = x + offset[0];
+                double py = y + lift;
+                double pz = z + offset[1];
+                entity.moveTo(px, py, pz, yRot, 0.0F);
+                if (level.noCollision(entity, entity.getBoundingBox())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private void showPetInfo(ServerPlayer sp, Cow cow, UUID ownerUuid) {
@@ -600,6 +640,13 @@ public class SuperCowMod implements ModInitializer {
         }
     }
 
+    private static boolean isPetInWorld(Cow pet) {
+        if (!(pet.level instanceof ServerLevel)) {
+            return false;
+        }
+        return !pet.removed && ((ServerLevel) pet.level).getEntity(pet.getUUID()) != null;
+    }
+
     private void onEndTick(MinecraftServer srv) {
         server = srv;
         serverTicks++;
@@ -628,6 +675,14 @@ public class SuperCowMod implements ModInitializer {
 
             Cow pet = getActivePet(ownerUuid);
             ServerPlayer owner = getPlayer(ownerUuid);
+            if (pet != null && !isPetInWorld(pet)) {
+                // A spawn that raced a chunk load used to leave a detached cow in the map: it kept
+                // shooting, but mobs could not see or hurt it and @e could not select it.
+                combatManager.onPetRemovedOrDied(ownerUuid, pet);
+                ownerByPetEntity.remove(pet.getUUID());
+                activePetByOwner.remove(ownerUuid);
+                pet = null;
+            }
             if (pet != null && pet.isAlive()) {
                 data.currentHealth = pet.getHealth();
                 data.maxHealth = pet.getMaxHealth();
@@ -648,8 +703,17 @@ public class SuperCowMod implements ModInitializer {
         tickCorpseCleanup();
         combatManager.tick();
         summonManager.tick();
+        MinionManager.tickAll();
         SpecialAttackManagers.tickAll();
+        SkillCleanup.tick();
         pathfindingManager.tick();
+        if (serverTicks % 40 == 0) {
+            // Safety net: anything left behind with the supercow_skill tag that the registry no
+            // longer knows about is removed, so a skill can never leak an entity permanently.
+            for (ServerLevel level : srv.getAllLevels()) {
+                SkillCleanup.sweep(level);
+            }
+        }
 
         if (serverTicks % 1200 == 0) {
             savePets();
@@ -847,7 +911,19 @@ public class SuperCowMod implements ModInitializer {
                     .then(Commands.literal("chicken").executes(ctx -> manualAttack(ctx.getSource(), "chicken")))
                     .then(Commands.literal("music").executes(ctx -> manualAttack(ctx.getSource(), "music")))
                     .then(Commands.literal("exploding_cow").executes(ctx -> manualAttack(ctx.getSource(), "exploding_cow")))
-                    .then(Commands.literal("summon").executes(ctx -> manualAttack(ctx.getSource(), "summon")))));
+                    .then(Commands.literal("summon").executes(ctx -> manualAttack(ctx.getSource(), "summon"))))
+                .then(Commands.literal("skills").executes(ctx -> skills(ctx.getSource())))
+                .then(Commands.literal("skill").requires(src -> src.hasPermission(2))
+                    .then(Commands.literal("arrow").executes(ctx -> forceSkill(ctx.getSource(), "arrow")))
+                    .then(Commands.literal("fireball").executes(ctx -> forceSkill(ctx.getSource(), "fireball")))
+                    .then(Commands.literal("potion").executes(ctx -> forceSkill(ctx.getSource(), "potion")))
+                    .then(Commands.literal("firework").executes(ctx -> forceSkill(ctx.getSource(), "firework")))
+                    .then(Commands.literal("chicken").executes(ctx -> forceSkill(ctx.getSource(), "chicken")))
+                    .then(Commands.literal("music").executes(ctx -> forceSkill(ctx.getSource(), "music")))
+                    .then(Commands.literal("exploding_cow").executes(ctx -> forceSkill(ctx.getSource(), "exploding_cow")))
+                    .then(Commands.literal("summon").executes(ctx -> forceSkill(ctx.getSource(), "summon")))
+                    .then(Commands.literal("summon_parrots").executes(ctx -> forceSkill(ctx.getSource(), "summon_parrots")))
+                    .then(Commands.literal("summon_rabbits").executes(ctx -> forceSkill(ctx.getSource(), "summon_rabbits")))));
         }
 
         private static ServerPlayer player(CommandSourceStack src) {
@@ -867,7 +943,44 @@ public class SuperCowMod implements ModInitializer {
             src.sendSuccess(new TextComponent("\u00A7e/supercow mode <protecting|aggressive|defensive|passive>"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow summonmode <follow|aggressive|defensive|guard>"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow attack <arrow|fireball|potion|firework|chicken|music|exploding_cow|summon>"), false);
+            src.sendSuccess(new TextComponent("\u00A7e/supercow skills \u00A77- \u5217\u51FA\u6280\u80FD\u8868\u4E0E\u6D3B\u52A8\u6280\u80FD\u5B9E\u4F53\u6570"), false);
+            src.sendSuccess(new TextComponent("\u00A7e/supercow skill <name> \u00A77- \u5F3A\u5236\u91CA\u653E\u4E00\u4E2A\u6280\u80FD (\u9700\u6743\u96502)"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow heal \u00A77- \u6CBB\u7597\u5BA0\u7269\u725B"), false);
+            return 1;
+        }
+
+        private static int skills(CommandSourceStack src) {
+            ServerPlayer p = player(src);
+            if (p == null) {
+                return 0;
+            }
+            UUID owner = p.getUUID();
+            p.sendMessage(new TextComponent("\u00A76\u00A7l\u8D85\u7EA7\u725B \u6280\u80FD\u8868 \u00A77(\u4E0E\u539F\u63D2\u4EF6\u4E00\u81F4)"), owner);
+            p.sendMessage(new TextComponent("\u00A7earrow \u00A77\u7BAD\u77E2 / \u00A7efireball \u00A77\u706B\u7403 / \u00A7epotion \u00A77\u836F\u6C34 / \u00A7efirework \u00A77\u70DF\u82B1"), owner);
+            p.sendMessage(new TextComponent("\u00A7echicken \u00A77\u8F70\u70B8\u9E21 / \u00A7emusic \u00A77\u97F3\u4E50 / \u00A7eexploding_cow \u00A77\u81EA\u7206\u725B"), owner);
+            p.sendMessage(new TextComponent("\u00A7esummon \u00A77\u62A4\u536B\u5C0F\u725B / \u00A7esummon_parrots \u00A77\u9E66\u9E49 / \u00A7esummon_rabbits \u00A77\u5154\u5B50"), owner);
+            p.sendMessage(new TextComponent("\u00A77\u6D3B\u52A8\u6280\u80FD\u5B9E\u4F53\uFF1A\u00A7f" + SkillCleanup.countForOwner(owner)
+                + " \u00A77(\u9E66\u9E49/\u5154\u5B50 \u00A7f" + MinionManager.countForOwner(owner) + "\u00A77)"), owner);
+            return 1;
+        }
+
+        private static int forceSkill(CommandSourceStack src, String skill) {
+            ServerPlayer p = player(src);
+            if (p == null) {
+                return 0;
+            }
+            SuperCowMod m = mod();
+            Cow pet = m.getActivePet(p.getUUID());
+            if (pet == null || !(p.level instanceof ServerLevel)) {
+                p.sendMessage(new TextComponent("\u00A7c[\u8D85\u7EA7\u725B] \u4F60\u6CA1\u6709\u5B58\u6D3B\u7684\u5BA0\u7269\u725B\u3002"), p.getUUID());
+                return 0;
+            }
+            boolean ok = m.getCombatManager().forceSkill((ServerLevel) p.level, p.getUUID(), skill);
+            if (!ok) {
+                p.sendMessage(new TextComponent("\u00A7c[\u8D85\u7EA7\u725B] \u9644\u8FD1\u6CA1\u6709\u53EF\u653B\u51FB\u7684\u76EE\u6807\u3002"), p.getUUID());
+                return 0;
+            }
+            p.sendMessage(new TextComponent("\u00A7a[\u8D85\u7EA7\u725B] \u91CA\u653E\u6280\u80FD\uFF1A\u00A7e" + skill), p.getUUID());
             return 1;
         }
 

@@ -155,6 +155,37 @@ public class SuperCowConfig {
     public double summonTargetRange = 10.0;
     public boolean consumeHayBaleForSummon = true;
 
+    // ---------------------------------------------------------------------------------
+    // Legacy roster restored from the original Bukkit plugin (m01244)
+    // ---------------------------------------------------------------------------------
+    public boolean legacySkillsEnabled = true;   // original weighted skill table instead of distance pools
+    public boolean legacyQuirksEnabled = true;   // the original "bugs" are kept on purpose, as skills
+    public boolean legacyMovementEnabled = true; // velocity-based "abstract" pathfinding for the pet
+
+    // Parrot / rabbit summons (original summon_parrots / summon_rabbits)
+    public int parrotSummonCount = 1;      // was 2
+    public int rageParrotSummonCount = 2;  // was 5
+    public int rabbitSummonCount = 2;      // was 3
+    public int rageRabbitSummonCount = 3;  // was 8
+    public int birdieLifetimeTicks = 300;  // 15s
+    public double parrotPeckDamage = 0.75; // was 2.0
+    public double rabbitBiteDamage = 1.0;  // was 3.0
+    public int minionAttackCooldownTicks = 40; // 2.0s per minion
+
+    // Quirks kept as skills
+    public double explodingCowPotionBugChance = 0.2; // original fired a potion from the exploding-cow branch
+    public double arrowHealAmount = 1.0;             // every arrow volley healed the pet (original 2.5)
+    public boolean musicInvertedTargeting = true;    // debuffs everyone EXCEPT the target
+    public boolean musicZeroKnockback = true;        // original knockback vector was always zero
+    public boolean eggHitsAnyNonFriendly = true;     // eggs may hit other players, never the owner's party
+
+    // Legacy movement tuning (original: OPTIMAL_COMBAT_DISTANCE 8.0, MAX_SPEED 0.6, STRAFE 0.4)
+    public double legacyMoveSpeed = 0.42;
+    public double legacyStrafeStrength = 0.16;
+    public double legacyJumpPower = 0.42;
+    public double legacyOptimalDistance = 8.0;
+    public double legacyFollowStopDistance = 2.0;
+
     public static SuperCowConfig load(File file) {
         if (file.exists()) {
             try (FileReader reader = new FileReader(file)) {
