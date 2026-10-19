@@ -56,6 +56,13 @@ public class ServerGamePacketListenerMixin {
             ci.cancel(); // No milking, shearing, trading, saddling or looting temporary actors.
             return;
         }
+        // INTERACT_AT and INTERACT can represent the same physical click. Count only
+        // INTERACT for owned cows so split packets cannot bypass the triple-click gate.
+        if (packet.getAction() == ServerboundInteractPacket.Action.INTERACT_AT
+            && decorative instanceof Cow && decorative.getTags().contains(SuperCowMod.TAG_PET)) {
+            ci.cancel();
+            return;
+        }
         if (packet.getAction() != ServerboundInteractPacket.Action.INTERACT) {
             return;
         }

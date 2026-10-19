@@ -60,6 +60,10 @@ public class PathfindingManager {
         int lineOfSightTimer;
         boolean cachedLineOfSight = true;
         int jumpCooldown;
+        Vec3 cachedDetourDir;
+        int detourTimer;
+        int detourHand;
+        int detourLockTicks;
         /** Consecutive ticks spent inside the follow braking band (used to park a follow path). */
         int arrivedTicks;
         UUID spiralRolledTarget;
@@ -520,9 +524,21 @@ public class PathfindingManager {
 
         Vec3 direction;
         if (state.cachedLineOfSight) {
+            state.detourHand = 0;
+            state.detourLockTicks = 0;
+            state.cachedDetourDir = null;
+            state.detourTimer = 0;
             direction = state.targetPos.subtract(pos);
         } else {
-            direction = alternativeDirection(mob, state.targetPos, cfg);
+            state.detourTimer--;
+            if (state.detourTimer <= 0 || state.cachedDetourDir == null) {
+                state.detourTimer = 4;
+                state.cachedDetourDir = alternativeDirection(state, mob, state.targetPos, cfg);
+            }
+            if (state.detourLockTicks > 0) {
+                state.detourLockTicks--;
+            }
+            direction = state.cachedDetourDir;
         }
 
         // Speed band, expressed relative to the profile's optimal distance so it adapts to any
@@ -565,9 +581,9 @@ public class PathfindingManager {
             vx += Math.cos(rad) * strafe;
             vz += Math.sin(rad) * strafe;
         } else {
-            // Re-aim the path straight at the target every tick and cap the travel speed.
-            Vec3 travel = state.targetPos.subtract(pos);
-            Vec3 flatTravel = new Vec3(travel.x, 0.0D, travel.z);
+            // Re-aim along the chosen direction (straight at target when clear, or detour when blocked)
+            // and cap the travel speed.
+            Vec3 flatTravel = new Vec3(direction.x, 0.0D, direction.z);
             if (flatTravel.lengthSqr() > 1.0E-4D) {
                 double walkSpeed;
                 if (followingOwner) {
@@ -584,11 +600,14 @@ public class PathfindingManager {
         double vy = mob.getDeltaMovement().y;
         if (mob.isOnGround()) {
             vy = 0.0D;
-            Vec3 ahead = pos.add(new Vec3(direction.x, 0.0D, direction.z).normalize().scale(1.2D));
+            Vec3 flatDir = new Vec3(direction.x, 0.0D, direction.z);
+            Vec3 ahead = flatDir.lengthSqr() > 1.0E-4D ? pos.add(flatDir.normalize().scale(1.2D)) : pos;
             BlockPos frontPos = new BlockPos(ahead.x, pos.y + 0.1D, ahead.z);
             boolean blocked = mob.level.getBlockState(frontPos).getMaterial().isSolid();
+            boolean stepClear = !mob.level.getBlockState(frontPos.above()).getMaterial().isSolid()
+                && !mob.level.getBlockState(frontPos.above(2)).getMaterial().isSolid();
             boolean headClear = !mob.level.getBlockState(new BlockPos(pos.x, pos.y + 2.0D, pos.z)).getMaterial().isSolid();
-            if (blocked && headClear) {
+            if (blocked && stepClear && headClear) {
                 vy = cfg.legacyJumpPower;
             } else if (state.jumpCooldown <= 0 && RANDOM.nextDouble() < 0.03D) {
                 // The original had a commented-out random hop; keep it as a comedic quirk.
@@ -605,9 +624,11 @@ public class PathfindingManager {
         // Stuck handling: the strafing pet can wedge itself into a corner. After 2s of no
         // progress on a long chase the pet blinks closer (same safety rule as before).
         if (state.ticksActive % 10 == 0) {
-            double movedSqr = mob.position().distanceToSqr(state.lastPos);
+            double movedX = mob.getX() - state.lastPos.x;
+            double movedZ = mob.getZ() - state.lastPos.z;
+            double movedHorizSqr = movedX * movedX + movedZ * movedZ;
             state.lastPos = mob.position();
-            if (movedSqr < 0.02D && dist > 6.0D) {
+            if (movedHorizSqr < 0.04D && dist > 6.0D) {
                 state.stuckTicks++;
             } else {
                 state.stuckTicks = 0;
@@ -760,38 +781,114 @@ public class PathfindingManager {
         return value;
     }
 
-    private Vec3 alternativeDirection(Mob mob, Vec3 targetPos, SuperCowConfig cfg) {
+    private Vec3 alternativeDirection(PathState state, Mob mob, Vec3 targetPos, SuperCowConfig cfg) {
         Vec3 pos = mob.position();
         Vec3 toTarget = targetPos.subtract(pos);
         double directDist = Math.sqrt(toTarget.x * toTarget.x + toTarget.z * toTarget.z);
-        Vec3 best = null;
-        double bestDist = directDist;
+        if (directDist < 1.0E-4D) {
+            return toTarget;
+        }
+        double baseAngle = Math.atan2(toTarget.z, toTarget.x);
         double radius = Math.min(4.0D, Math.max(2.0D, cfg.legacyOptimalDistance * 0.5D));
-        for (int angle = 0; angle < 360; angle += 45) {
-            double rad = Math.toRadians(angle);
-            Vec3 candidate = new Vec3(
-                pos.x + Math.cos(rad) * radius,
-                pos.y,
-                pos.z + Math.sin(rad) * radius
-            );
-            if (!hasLineOfSightFrom(mob, pos, candidate)) {
-                continue;
-            }
-            if (!isLocationSafe(mob, candidate)) {
+
+        // 1) Try forward fan offsets (+-30, +-60, +-75 deg) that still make progress toward target
+        //    or immediately regain line of sight to the target around a corner.
+        int handPref = state.detourHand != 0 ? state.detourHand : 1;
+        int[] forwardDegs = new int[] {
+            30 * handPref, -30 * handPref,
+            60 * handPref, -60 * handPref,
+            75 * handPref, -75 * handPref
+        };
+        Vec3 bestForward = null;
+        double bestScore = Double.MAX_VALUE;
+        for (int deg : forwardDegs) {
+            double rad = baseAngle + Math.toRadians(deg);
+            Vec3 step = new Vec3(Math.cos(rad), 0.0D, Math.sin(rad));
+            Vec3 candidate = pos.add(step.scale(radius));
+            if (!isStepClear(mob, pos, step, radius)) {
                 continue;
             }
             double dx = candidate.x - targetPos.x;
             double dz = candidate.z - targetPos.z;
             double d = Math.sqrt(dx * dx + dz * dz);
-            if (d < bestDist) {
-                bestDist = d;
-                best = candidate;
+            boolean seesTarget = hasLineOfSightFrom(mob, candidate, targetPos);
+            if (seesTarget || (state.detourLockTicks <= 0 && d < directDist - 0.35D)) {
+                double score = seesTarget ? d - 4.0D : d;
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestForward = step;
+                }
             }
         }
-        if (best == null) {
-            return toTarget;
+        if (bestForward != null) {
+            return bestForward;
         }
-        return best.subtract(pos);
+
+        // 2) Wall-following detour: pick a lateral hand (+1 or -1) by probing which side of the
+        //    obstacle clears sooner, then stay committed to that side until around the corner.
+        if (state.detourHand == 0 || state.detourLockTicks <= 0) {
+            state.detourHand = pickWallFollowHand(mob, pos, targetPos, baseAngle);
+            state.detourLockTicks = 50;
+        }
+        int hand = state.detourHand;
+        int[] wallDegs = new int[] {
+            90 * hand, 75 * hand, 110 * hand, 60 * hand, 135 * hand,
+            -90 * hand, -75 * hand, -110 * hand, 180
+        };
+        for (int deg : wallDegs) {
+            double rad = baseAngle + Math.toRadians(deg);
+            Vec3 step = new Vec3(Math.cos(rad), 0.0D, Math.sin(rad));
+            if (isStepClear(mob, pos, step, 2.2D)) {
+                if (deg * hand < 0 && deg != 180) {
+                    state.detourHand = -hand;
+                    state.detourLockTicks = 50;
+                }
+                return step;
+            }
+        }
+        return toTarget;
+    }
+
+    private static int pickWallFollowHand(Mob mob, Vec3 pos, Vec3 targetPos, double baseAngle) {
+        double plusAngle = baseAngle + Math.PI * 0.5D;
+        double minusAngle = baseAngle - Math.PI * 0.5D;
+        Vec3 plusDir = new Vec3(Math.cos(plusAngle), 0.0D, Math.sin(plusAngle));
+        Vec3 minusDir = new Vec3(Math.cos(minusAngle), 0.0D, Math.sin(minusAngle));
+        boolean plusBlocked = false;
+        boolean minusBlocked = false;
+        for (int d = 2; d <= 10; d += 2) {
+            if (!plusBlocked) {
+                Vec3 p = pos.add(plusDir.scale(d));
+                if (!hasLineOfSightFrom(mob, pos, p) || !isLocationSafe(mob, p)) {
+                    plusBlocked = true;
+                } else if (hasLineOfSightFrom(mob, p, targetPos)) {
+                    return 1;
+                }
+            }
+            if (!minusBlocked) {
+                Vec3 m = pos.add(minusDir.scale(d));
+                if (!hasLineOfSightFrom(mob, pos, m) || !isLocationSafe(mob, m)) {
+                    minusBlocked = true;
+                } else if (hasLineOfSightFrom(mob, m, targetPos)) {
+                    return -1;
+                }
+            }
+        }
+        if (!plusBlocked && minusBlocked) {
+            return 1;
+        }
+        if (!minusBlocked && plusBlocked) {
+            return -1;
+        }
+        return 1;
+    }
+
+    private static boolean isStepClear(Mob mob, Vec3 pos, Vec3 unitDir, double dist) {
+        Vec3 near = pos.add(unitDir.scale(Math.min(1.2D, dist)));
+        Vec3 far = pos.add(unitDir.scale(dist));
+        return hasLineOfSightFrom(mob, pos, far)
+            && isLocationSafe(mob, near)
+            && isLocationSafe(mob, far);
     }
 
     private static boolean hasLineOfSight(Mob mob, Vec3 targetPos) {

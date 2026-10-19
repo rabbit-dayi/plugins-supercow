@@ -90,6 +90,57 @@ public class CombatManager {
     private final Map<UUID, Long> untickableTargets = new HashMap<>();
     private final Map<UUID, Integer> untickableSnapshots = new HashMap<>();
     private final Map<UUID, Long> rageEndTick = new HashMap<>();
+    private final Map<UUID, String> currentSkillIds = new HashMap<>();
+    private final Map<UUID, Long> currentSkillEndTick = new HashMap<>();
+    private static final int SKILL_DISPLAY_TICKS = 40;
+
+    /** Server-thread API; UUIDs identify owners, not pet entities. Null means no recent cast. */
+    public String getCurrentSkillId(UUID ownerUuid) {
+        return getCurrentSkillRemainingTicks(ownerUuid) > 0 ? currentSkillIds.get(ownerUuid) : null;
+    }
+
+    /** Display TTL only, not the lifetime of projectiles, summons, or ongoing effects. */
+    public int getCurrentSkillRemainingTicks(UUID ownerUuid) {
+        Long end = currentSkillEndTick.get(ownerUuid);
+        long remaining = end == null ? 0L : end - mod.getServerTicks();
+        if (remaining <= 0L) {
+            currentSkillIds.remove(ownerUuid);
+            currentSkillEndTick.remove(ownerUuid);
+            return 0;
+        }
+        return (int) Math.min(Integer.MAX_VALUE, remaining);
+    }
+
+    public int getAttackCooldownRemainingTicks(UUID ownerUuid) {
+        Long last = lastAttackTick.get(ownerUuid);
+        if (last == null) return 0;
+        long remaining = attackCooldownTicks(isInRageMode(ownerUuid), mod.getConfig())
+            - (mod.getServerTicks() - last);
+        return (int) Math.max(0L, Math.min(Integer.MAX_VALUE, remaining));
+    }
+
+    /** Notify UI of an actually triggered external skill (e.g. automatic sky spiral), server thread only. */
+    public void notifySkillTriggered(UUID ownerUuid, String skillId, int displayTicks) {
+        if (ownerUuid == null || skillId == null || displayTicks <= 0) return;
+        currentSkillIds.put(ownerUuid, canonicalSkillId(skillId));
+        currentSkillEndTick.put(ownerUuid, mod.getServerTicks() + displayTicks);
+    }
+
+    private static int attackCooldownTicks(boolean rage, SuperCowConfig cfg) {
+        // Vanilla rejects equal/lower damage while invulnerableTime > 10. Never reset that timer.
+        return Math.max(11, rage ? cfg.rageAttackCooldownTicks : cfg.attackCooldownTicks);
+    }
+
+    private static String canonicalSkillId(String skillId) {
+        String id = skillId.toLowerCase(java.util.Locale.ROOT);
+        switch (id) {
+            case "explodingcow": return "exploding_cow";
+            case "parrot": case "parrots": return "summon_parrots";
+            case "rabbit": case "rabbits": return "summon_rabbits";
+            case "spiral": case "sky": case "fly": return "sky_spiral";
+            default: return id;
+        }
+    }
 
     public CombatManager(SuperCowMod mod, PathfindingManager pathfindingManager, SummonManager summonManager) {
         this.mod = mod;
@@ -321,9 +372,13 @@ public class CombatManager {
             pathfindingManager.stopPathfinding(pet);
         }
 
-        int cooldown = rage ? cfg.rageAttackCooldownTicks : cfg.attackCooldownTicks;
-        long lastAtk = lastAttackTick.getOrDefault(ownerUuid, 0L);
+        int cooldown = attackCooldownTicks(rage, cfg);
+        long lastAtk = lastAttackTick.getOrDefault(ownerUuid, nowTick - cooldown);
         if ((nowTick - lastAtk) < cooldown) {
+            return;
+        }
+        // A recent hit from the owner/another mob must not consume a whole melee cooldown.
+        if (dist <= cfg.closeRangeDistance + 0.5D && target.invulnerableTime > 10) {
             return;
         }
         lastAttackTick.put(ownerUuid, nowTick);
@@ -483,10 +538,13 @@ public class CombatManager {
 
     /** Ticks a pet may spend "wanting to move" without covering ground before it is rescued. */
     private static final int STUCK_RESCUE_TICKS = 100;
-    private static final double STUCK_MIN_TRAVEL = 0.5D;
+    private static final int STUCK_NO_PROGRESS_TICKS = 140;
+    private static final double STUCK_MIN_TRAVEL = 1.6D;
     private static final int PET_LINK_MEMORY_TICKS = 400;
     private final Map<UUID, Integer> followStuckTicks = new HashMap<>();
     private final Map<UUID, net.minecraft.world.phys.Vec3> followStuckAnchor = new HashMap<>();
+    private final Map<UUID, Integer> followNoProgressTicks = new HashMap<>();
+    private final Map<UUID, Double> followBestDist = new HashMap<>();
     /** Pet entities still tagged as this player's, even if the fast map lost them. */
     private final Map<UUID, UUID> petLinkByOwner = new HashMap<>();
     private final Map<UUID, Long> petLinkSeenAt = new HashMap<>();
@@ -559,25 +617,50 @@ public class CombatManager {
         double dist = Math.sqrt(dx * dx + dz * dz);
         double follow = Math.max(2.0D, cfg.followDistance);
         double startRadius = follow + Math.max(0.0D, cfg.followStartBuffer);
-        boolean wantsToMove = dist > startRadius || dy > 8.0D;
+        boolean activeFollow = pathfindingManager.followStopRadius(id) > 0.0D && dist > follow + 0.5D;
+        boolean wantsToMove = dist > startRadius || dy > 8.0D || activeFollow;
         if (!wantsToMove) {
             followStuckTicks.remove(id);
             followStuckAnchor.remove(id);
+            followNoProgressTicks.remove(id);
+            followBestDist.remove(id);
             return false;
         }
         net.minecraft.world.phys.Vec3 anchor = followStuckAnchor.get(id);
-        if (anchor == null || anchor.distanceTo(pet.position()) > STUCK_MIN_TRAVEL) {
-            followStuckAnchor.put(id, pet.position());
-            followStuckTicks.put(id, 0);
-            return false;
+        double movedHoriz = 0.0D;
+        if (anchor != null) {
+            double ax = pet.getX() - anchor.x;
+            double az = pet.getZ() - anchor.z;
+            movedHoriz = Math.sqrt(ax * ax + az * az);
         }
-        int ticks = followStuckTicks.getOrDefault(id, 0) + 1;
-        followStuckTicks.put(id, ticks);
-        if (ticks < STUCK_RESCUE_TICKS) {
+        int stuckTicks;
+        if (anchor == null || movedHoriz > STUCK_MIN_TRAVEL) {
+            followStuckAnchor.put(id, pet.position());
+            stuckTicks = 0;
+            followStuckTicks.put(id, 0);
+        } else {
+            stuckTicks = followStuckTicks.getOrDefault(id, 0) + 1;
+            followStuckTicks.put(id, stuckTicks);
+        }
+
+        Double bestDist = followBestDist.get(id);
+        int noProgressTicks;
+        if (bestDist == null || dist < bestDist.doubleValue() - 0.8D || dist > bestDist.doubleValue() + 3.0D) {
+            followBestDist.put(id, dist);
+            noProgressTicks = 0;
+            followNoProgressTicks.put(id, 0);
+        } else {
+            noProgressTicks = followNoProgressTicks.getOrDefault(id, 0) + 1;
+            followNoProgressTicks.put(id, noProgressTicks);
+        }
+
+        if (stuckTicks < STUCK_RESCUE_TICKS && noProgressTicks < STUCK_NO_PROGRESS_TICKS) {
             return false;
         }
         followStuckTicks.remove(id);
         followStuckAnchor.remove(id);
+        followNoProgressTicks.remove(id);
+        followBestDist.remove(id);
         pathfindingManager.stopPathfinding(pet);
         double tx = player.getX() + 1.5D;
         double ty = player.getY();
@@ -612,15 +695,17 @@ public class CombatManager {
 
         if (canSpecial && random.nextDouble() < specialProb) {
             String chosen = cfg.legacySkillsEnabled ? rollWeightedSkill(rage) : chooseSpecialAttackByDistance(dist, cfg);
-            lastSpecialAttackTick.put(ownerUuid, nowTick);
-            executeNamedAttack(level, ownerUuid, pet, owner, target, chosen, rage, false);
-            return;
+            if (executeNamedAttack(level, ownerUuid, pet, owner, target, chosen, rage, false)) {
+                lastSpecialAttackTick.put(ownerUuid, nowTick);
+                return;
+            }
+            // Failed summons/disabled casts should not leave an empty attack cycle.
         }
 
         if (dist <= cfg.closeRangeDistance + 0.5D) {
             performMeleeAttack(level, ownerUuid, pet, target, data, rage, cfg);
         } else {
-            SpecialAttackManagers.shootArrows(level, pet, ownerUuid, target, rage);
+            executeNamedAttack(level, ownerUuid, pet, owner, target, "arrow", rage, false);
         }
     }
 
@@ -693,7 +778,19 @@ public class CombatManager {
         return pool[random.nextInt(pool.length)];
     }
 
+    /** Single public combat-skill dispatch: only successful releases become visible to UI. */
     public boolean executeNamedAttack(
+        ServerLevel level, UUID ownerUuid, Cow pet, ServerPlayer owner, LivingEntity target,
+        String skillName, boolean rage, boolean manualCommand
+    ) {
+        if (skillName == null) return false;
+        String id = canonicalSkillId(skillName);
+        boolean released = dispatchNamedAttack(level, ownerUuid, pet, owner, target, id, rage, manualCommand);
+        if (released) notifySkillTriggered(ownerUuid, id, SKILL_DISPLAY_TICKS);
+        return released;
+    }
+
+    private boolean dispatchNamedAttack(
         ServerLevel level,
         UUID ownerUuid,
         Cow pet,
@@ -798,7 +895,7 @@ public class CombatManager {
             double dz = target.getZ() - pet.getZ();
             double len = Math.sqrt(dx * dx + dz * dz);
             if (len > 1.0E-4D) {
-                target.push((dx / len) * 0.25D, 0.15D, (dz / len) * 0.25D);
+                target.push((dx / len) * 0.12D, 0.05D, (dz / len) * 0.12D);
             }
             if (isCrit) {
                 level.sendParticles(ParticleTypes.CRIT, target.getX(), target.getY() + target.getBbHeight() * 0.5D, target.getZ(), 8, 0.25D, 0.25D, 0.25D, 0.1D);
@@ -818,6 +915,8 @@ public class CombatManager {
         clearTarget(ownerUuid);
         lastAttackTick.remove(ownerUuid);
         lastSpecialAttackTick.remove(ownerUuid);
+        currentSkillIds.remove(ownerUuid);
+        currentSkillEndTick.remove(ownerUuid);
         rageEndTick.remove(ownerUuid);
         if (pet != null) {
             pathfindingManager.stopPathfinding(pet);
@@ -839,7 +938,9 @@ public class CombatManager {
         // Movement skills do not need a target: they act on the pet itself.
         if ("sky_spiral".equalsIgnoreCase(skillName) || "spiral".equalsIgnoreCase(skillName)
             || "sky".equalsIgnoreCase(skillName) || "fly".equalsIgnoreCase(skillName)) {
-            return mod.getPathfindingManager() != null && mod.getPathfindingManager().forceSkySpiral(pet);
+            boolean released = mod.getPathfindingManager() != null && mod.getPathfindingManager().forceSkySpiral(pet);
+            if (released) notifySkillTriggered(ownerUuid, "sky_spiral", SKILL_DISPLAY_TICKS);
+            return released;
         }
         LivingEntity target = getCurrentTarget(ownerUuid);
         if (target == null || !target.isAlive() || target.removed) {
@@ -849,12 +950,21 @@ public class CombatManager {
             return false;
         }
         setTarget(ownerUuid, pet, target);
-        lastSpecialAttackTick.put(ownerUuid, mod.getServerTicks());
-        return executeNamedAttack(level, ownerUuid, pet, owner, target, skillName, false, true);
+        boolean released = executeNamedAttack(level, ownerUuid, pet, owner, target, skillName, false, true);
+        if (released) lastSpecialAttackTick.put(ownerUuid, mod.getServerTicks());
+        return released;
     }
 
     /** Periodic bookkeeping: drop targets whose pet or victim disappeared. */
     public void tick() {
+        Iterator<Map.Entry<UUID, Long>> skillIt = currentSkillEndTick.entrySet().iterator();
+        while (skillIt.hasNext()) {
+            Map.Entry<UUID, Long> entry = skillIt.next();
+            if (entry.getValue() <= mod.getServerTicks()) {
+                currentSkillIds.remove(entry.getKey());
+                skillIt.remove();
+            }
+        }
         // Iterator instead of a defensive ArrayList copy: this runs on every server tick.
         Iterator<Map.Entry<UUID, LivingEntity>> it = currentTargets.entrySet().iterator();
         while (it.hasNext()) {
@@ -884,6 +994,8 @@ public class CombatManager {
         currentTargets.clear();
         lastAttackTick.clear();
         lastSpecialAttackTick.clear();
+        currentSkillIds.clear();
+        currentSkillEndTick.clear();
         rageEndTick.clear();
         summonManager.cleanupAll();
         MinionManager.cleanupAll();

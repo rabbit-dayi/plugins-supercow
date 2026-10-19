@@ -82,6 +82,14 @@ public class SuperCowMod implements ModInitializer {
     private final Map<UUID, Cow> activePetByOwner = new HashMap<>();
     private final Map<UUID, UUID> ownerByPetEntity = new HashMap<>();
     private final Map<UUID, Long> lastFeedTick = new HashMap<>();
+    private static final class GuiClickSequence {
+        UUID pet;
+        long firstTick;
+        long lastTick;
+        int count;
+    }
+    private final Map<UUID, GuiClickSequence> guiClicks = new HashMap<>();
+    private final Map<UUID, Long> nextLostPetScanTick = new HashMap<>();
 
     private SuperCowConfig config;
     private PathfindingManager pathfindingManager;
@@ -156,6 +164,7 @@ public class SuperCowMod implements ModInitializer {
                 // glowing target and leftover helper entities around until the server restarted.
                 UUID uuid = player.getUUID();
                 Cow pet = getActivePet(uuid);
+                guiClicks.remove(uuid);
                 combatManager.onPetRemovedOrDied(uuid, pet);
                 SkillCleanup.cleanupForOwner(uuid);
                 savePets();
@@ -275,6 +284,13 @@ public class SuperCowMod implements ModInitializer {
      * i.e. the packet should be cancelled so vanilla cow behaviour does not also run.
      */
     public boolean handleCowRightClick(ServerPlayer sp, Cow cow, InteractionHand hand) {
+        if (!cow.isAlive() || cow.level != sp.level || sp.distanceToSqr(cow) > 36.0D) {
+            return false;
+        }
+        // A client may send both hand interactions for one physical click.
+        if (hand != InteractionHand.MAIN_HAND) {
+            return cow.getTags().contains(TAG_PET);
+        }
         ItemStack held = sp.getItemInHand(hand);
         boolean isPet = cow.getTags().contains(TAG_PET);
         UUID ownerUuid = sp.getUUID();
@@ -306,15 +322,33 @@ public class SuperCowMod implements ModInitializer {
             return true;
         }
         if (held.getItem() == Items.HAY_BLOCK) {
+            guiClicks.remove(ownerUuid);
             onFeedHay(sp, cow, petOwner);
             return true;
         }
-        // Empty-hand right-click opens the chest GUI; sneaking keeps the plain text info dump.
+        // Three distinct main-hand clicks within 1.2s; duplicate packets in one tick
+        // and the second hand never count. Feeding/sneaking interrupts the sequence.
         if (config.petGuiEnabled && !sp.isShiftKeyDown()
             && (!config.petGuiNeedsEmptyHand || held.isEmpty())) {
-            PetGui.open(sp, cow, petOwner);
+            GuiClickSequence clicks = guiClicks.get(ownerUuid);
+            if (clicks == null || !cow.getUUID().equals(clicks.pet)
+                || serverTicks - clicks.lastTick > 12 || serverTicks - clicks.firstTick > 24) {
+                clicks = new GuiClickSequence();
+                clicks.pet = cow.getUUID();
+                clicks.firstTick = serverTicks;
+                clicks.lastTick = serverTicks - 1;
+                guiClicks.put(ownerUuid, clicks);
+            }
+            if (clicks.lastTick != serverTicks) {
+                clicks.lastTick = serverTicks;
+                if (++clicks.count >= 3) {
+                    guiClicks.remove(ownerUuid);
+                    PetGui.open(sp, cow, petOwner);
+                }
+            }
             return true;
         }
+        guiClicks.remove(ownerUuid);
         showPetInfo(sp, cow, petOwner);
         return true;
     }
@@ -360,7 +394,7 @@ public class SuperCowMod implements ModInitializer {
         petDataByOwner.put(ownerUuid, data);
         turnIntoPet(cow, ownerUuid, data);
         player.level.playSound(null, cow.getX(), cow.getY(), cow.getZ(), SoundEvents.PLAYER_LEVELUP, SoundSource.NEUTRAL, 0.7F, 1.4F);
-        player.sendMessage(new TextComponent("\u00A7a\u00A7l[\u8D85\u7EA7\u725B] \u606D\u559C\uFF01\u4F60\u9A6F\u670D\u4E86\u4E00\u53EA\u8D85\u7EA7\u725B\uFF01\u53F3\u952E\u67E5\u770B\u4FE1\u606F\uFF0C\u624B\u6301\u5E72\u8349\u5757\u53EF\u5582\u98DF\u3002"), ownerUuid);
+        player.sendMessage(new TextComponent("\u00A7a\u00A7l[\u8D85\u7EA7\u725B] \u606D\u559C\uFF01\u4F60\u9A6F\u670D\u4E86\u4E00\u53EA\u8D85\u7EA7\u725B\uFF01连续右键三次打开面板\uFF0C\u624B\u6301\u5E72\u8349\u5757\u53EF\u5582\u98DF\u3002"), ownerUuid);
         savePets();
     }
 
@@ -379,6 +413,22 @@ public class SuperCowMod implements ModInitializer {
         ownerByPetEntity.put(cow.getUUID(), ownerUuid);
         combatManager.setPetMode(ownerUuid, PetMode.fromString(data.combatMode));
         summonManager.setSummonMode(ownerUuid, SummonMode.fromString(data.summonMode));
+    }
+
+    /** Update only on text changes, avoiding a metadata packet every tick. */
+    private void updatePetSkillName(UUID ownerUuid, Cow pet, PetData data) {
+        String skillId = combatManager.getCurrentSkillId(ownerUuid);
+        if (pathfindingManager.isSpiraling(pet.getUUID())) {
+            skillId = Skills.SKY_SPIRAL;
+        }
+        String text = "§6§l超级牛 §eLv." + data.level;
+        if (skillId != null) {
+            Skills.Skill skill = Skills.byId(skillId);
+            text += " §7| §b" + (skill == null ? skillId : skill.display);
+        }
+        if (pet.getCustomName() == null || !text.equals(pet.getCustomName().getString())) {
+            pet.setCustomName(new TextComponent(text));
+        }
     }
 
     /** Re-binds an already-loaded pet entity into both ownership maps and refreshes its stats/modes. */
@@ -828,15 +878,22 @@ public class SuperCowMod implements ModInitializer {
                 continue;
             }
 
+            ServerPlayer owner = getPlayer(ownerUuid);
             Cow pet = getActivePet(ownerUuid);
-            if ((pet == null || !pet.isAlive()) && data.isAlive) {
+            if ((pet == null || !pet.isAlive()) && data.isAlive && owner != null) {
                 // The in-memory link survived a world unload/reload: the cow is still in the map but
                 // the entity is gone, so the tick below never sees a pet and never rebuilds it.
-                // Try to re-bind an already loaded pet first, otherwise spawn a fresh one.
-                Cow rebind = findLoadedPet(ownerUuid);
-                if (rebind != null) {
-                    bindPetEntity(ownerUuid, rebind);
-                    pet = rebind;
+                // Only scan when the owner is online and throttle missed global scans to once per second.
+                Long nextScan = nextLostPetScanTick.get(ownerUuid);
+                if (nextScan == null || serverTicks >= nextScan.longValue()) {
+                    Cow rebind = findLoadedPet(ownerUuid);
+                    if (rebind != null) {
+                        bindPetEntity(ownerUuid, rebind);
+                        nextLostPetScanTick.remove(ownerUuid);
+                        pet = rebind;
+                    } else {
+                        nextLostPetScanTick.put(ownerUuid, serverTicks + 20L);
+                    }
                 }
             }
             if (pet != null && !isPetInWorld(pet)) {
@@ -864,13 +921,11 @@ public class SuperCowMod implements ModInitializer {
                     && !pathfindingManager.isSpiraling(pet.getUUID())) {
                     pathfindingManager.applyIdleGravity(pet);
                 }
+                if (serverTicks % 2 == 0 && owner != null) {
+                    combatManager.tickPetCombat(ownerUuid, pet, owner, data);
+                }
                 if (serverTicks % 2 == 0) {
-                    // Owner lookup happens here (once per pet per combat tick) instead of on every
-                    // server tick: the passive follow no longer pays for it 20x a second.
-                    ServerPlayer owner = getPlayer(ownerUuid);
-                    if (owner != null) {
-                        combatManager.tickPetCombat(ownerUuid, pet, owner, data);
-                    }
+                    updatePetSkillName(ownerUuid, pet, data);
                 }
                 // 牛自己的哞哞声默认关掉：跟着跑的时候一声接一声太吵（配置可开回来）。
                 // Only written when the flag actually disagrees: setSilent() marks the entity dirty,
@@ -879,12 +934,10 @@ public class SuperCowMod implements ModInitializer {
                 if (pet.isSilent() != wantSilent) {
                     pet.setSilent(wantSilent);
                 }
-            } else if (getActivePet(ownerUuid) == null && data.isAlive) {
+            } else if (getActivePet(ownerUuid) == null && data.isAlive && owner != null) {
                 // Pet chunk unloaded / entity lost: re-spawn next to the owner.
-                ServerPlayer owner = getPlayer(ownerUuid);
-                if (owner != null) {
-                    spawnPetFor(owner, data);
-                }
+                spawnPetFor(owner, data);
+                nextLostPetScanTick.remove(ownerUuid);
             }
         }
 
@@ -1264,7 +1317,7 @@ public class SuperCowMod implements ModInitializer {
                 p.sendMessage(new TextComponent("\u00A7c[\u8D85\u7EA7\u725B] \u4F60\u6CA1\u6709\u5B58\u6D3B\u7684\u5BA0\u7269\u725B\u3002"), p.getUUID());
                 return 0;
             }
-            PetGui.open(p, pet, p.getUUID(), page - 1);
+            if (!PetGui.setPage(p, page - 1)) PetGui.open(p, pet, p.getUUID(), page - 1);
             return 1;
         }
 

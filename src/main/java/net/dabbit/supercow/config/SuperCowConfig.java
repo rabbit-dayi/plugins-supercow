@@ -25,8 +25,8 @@ public class SuperCowConfig {
     public double baseSpeed = 0.25;
     public double speedPerLevel = 0.003;
     public double maxSpeed = 0.32;
-    public double baseDamage = 3.0;
-    public double damagePerLevel = 0.3;
+    public double baseDamage = 1.2;
+    public double damagePerLevel = 0.12;
 
     // Feeding & Revival (conservative)
     public double hayHealAmount = 4.0;
@@ -37,10 +37,10 @@ public class SuperCowConfig {
     public int expPerLevelStep = 60;
 
     // Combat core (conservative)
-    public int attackCooldownTicks = 40; // 2.0s (was 1.0s)
+    public int attackCooldownTicks = 14; // 0.7s; lighter, more responsive attacks
     public int specialAttackCooldownTicks = 120; // 6.0s
-    public double specialAttackChance = 0.15; // 15% (was 30%)
-    public double rageSpecialAttackChance = 0.25; // 25% (was 60%)
+    public double specialAttackChance = 0.055; // Faster basic cadence must not spam special entities
+    public double rageSpecialAttackChance = 0.12; // Keep special casts per second near the old rate
     public double closeRange = 4.0;
     public double mediumRange = 8.0;
     public double farRange = 14.0;
@@ -73,7 +73,7 @@ public class SuperCowConfig {
     public double teleportDistance = 32.0;
     public double detectionRange = 10.0; // AGGRESSIVE auto-acquire
     public double protectRange = 6.0; // PROTECTING auto-acquire
-    public int rageAttackCooldownTicks = 25; // 1.25s
+    public int rageAttackCooldownTicks = 12; // 0.6s; above vanilla hurt immunity window
     public double critChance = 0.15;
     public double critMultiplier = 1.5;
     public int expPerKill = 10;
@@ -87,8 +87,8 @@ public class SuperCowConfig {
     // Arrow attack (conservative)
     public int normalArrowCount = 1; // was 3
     public int rageArrowCount = 2; // was 5
-    public double normalArrowDamage = 2.5; // was 6.0
-    public double rageArrowDamage = 3.5; // was 9.0
+    public double normalArrowDamage = 1.0; // Lighter baseline ranged attacks
+    public double rageArrowDamage = 1.5;
     public double arrowEffectChance = 0.35; // 35% (was 100%)
     public double arrowSpeed = 1.6;
     public double arrowSpread = 4.0;
@@ -247,7 +247,7 @@ public class SuperCowConfig {
 
     /** Schema version so one-shot default migrations never overwrite user-chosen values on reload. */
     public int configVersion = 0;
-    public static final int CURRENT_CONFIG_VERSION = 2;
+    public static final int CURRENT_CONFIG_VERSION = 4;
 
     public static SuperCowConfig load(File file) {
         if (file.exists()) {
@@ -255,6 +255,7 @@ public class SuperCowConfig {
                 SuperCowConfig loaded = GSON.fromJson(reader, SuperCowConfig.class);
                 if (loaded != null) {
                     boolean migrated = loaded.repairFollowDefaults();
+                    migrated |= loaded.repairCombatDefaults();
                     if (migrated) {
                         loaded.save(file);
                     }
@@ -277,7 +278,7 @@ public class SuperCowConfig {
      */
     public boolean repairFollowDefaults() {
         boolean migrated = false;
-        if (configVersion < CURRENT_CONFIG_VERSION) {
+        if (configVersion < 2) {
             if (Math.abs(followDistance - 4.0D) < 1.0E-6D || Math.abs(followDistance - 10.0D) < 1.0E-6D) {
                 followDistance = 20.0D;
             }
@@ -290,7 +291,7 @@ public class SuperCowConfig {
             if (Math.abs(teleportToOwnerDistance - 24.0D) < 1.0E-6D) {
                 teleportToOwnerDistance = 32.0D;
             }
-            configVersion = CURRENT_CONFIG_VERSION;
+            configVersion = 2;
             migrated = true;
         }
         if (followDistance < 2.0D) {
@@ -315,6 +316,24 @@ public class SuperCowConfig {
             teleportToOwnerDistance = Math.max(32.0D, minTeleport);
         }
         return migrated;
+    }
+
+    /** One-shot combat migration: only the previous defaults change; custom tuning survives. */
+    public boolean repairCombatDefaults() {
+        if (configVersion >= CURRENT_CONFIG_VERSION) {
+            return false;
+        }
+        boolean legacy = configVersion < 3;
+        if (attackCooldownTicks == (legacy ? 40 : 24)) attackCooldownTicks = 14;
+        if (rageAttackCooldownTicks == (legacy ? 25 : 16)) rageAttackCooldownTicks = 12;
+        if (Double.compare(baseDamage, legacy ? 3.0D : 2.0D) == 0) baseDamage = 1.2D;
+        if (Double.compare(damagePerLevel, legacy ? 0.3D : 0.2D) == 0) damagePerLevel = 0.12D;
+        if (Double.compare(normalArrowDamage, legacy ? 2.5D : 1.75D) == 0) normalArrowDamage = 1.0D;
+        if (Double.compare(rageArrowDamage, legacy ? 3.5D : 2.5D) == 0) rageArrowDamage = 1.5D;
+        if (Double.compare(specialAttackChance, legacy ? 0.15D : 0.09D) == 0) specialAttackChance = 0.055D;
+        if (Double.compare(rageSpecialAttackChance, legacy ? 0.25D : 0.16D) == 0) rageSpecialAttackChance = 0.12D;
+        configVersion = CURRENT_CONFIG_VERSION;
+        return true;
     }
 
     /** 技能是否启用（缺省全部启用；sky_spiral 走自己的开关） */

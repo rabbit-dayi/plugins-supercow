@@ -82,3 +82,33 @@
 - 生产新包 SHA-256：b3cbc2173ac4fc2d73eef040860fcf9441e0aba9f4c6fb00357d9c74ee9c2676，与 build/libs 产物一致。
 - 发布采用新补丁标签 1.0.1-1.16.5，保留旧 1.0.0-1.16.5 标签与下载包；安装时只放正式 JAR，不装 sources.jar。
 - /root/deploy_sc.sh 的旧辅助脚本仍硬编码 1.0.0 文件名，不要直接用于新版本；本轮部署脚本 /tmp/sc-prod-1.0.1-deploy.sh 是一次性操作，不可重复运行。
+
+## 6. 未发布工作区：寻路修复与战斗/GUI体验调整（2026-10-19）
+
+- 本节覆盖当前未提交代码；生产服和 GitHub Release 仍为原 1.0.1，未部署生产、未 push，版本号暂未递增。测试服 25566 加载本工作区构建。
+- 寻路：保留前轮绕墙方向缓存、沿墙侧向探测、非战斗分支不覆盖绕障方向、高墙不盲目跳跃、水平位移与无接近进度脱困；失联宠物查找跳过离线主人并限频20 tick。复测日志 /tmp/sc-nav-retest2-client.log：直线3/3、长墙3/3、封闭救援约4.8s。未对任意迷宫/复杂地形作全局保证。
+- 普攻：默认普通冷却40→24 tick（2→1.2秒），狂暴25→16 tick（1.25→0.8秒）；基础伤害3→2、每级成长0.3→0.2、普通箭2.5→1.75、狂暴箭3.5→2.5。仅普攻/普通箭调低，其他技能专属伤害未整体缩放。特殊技能CD仍120 tick、实体数量不变，触发概率0.15/0.25→0.09/0.16，防止普攻加速顺带放大实体负载。最低攻击间隔11 tick，不重置原版无敌帧；近战命中窗口未到则不消耗整轮冷却。
+- 配置schema3：repairCombatDefaults仅匹配旧默认后迁移，不覆盖其他自定义值；repairFollowDefaults仅版本<2时迁移，保留v2用户主动设为4/10的跟随距离。
+- 面板入口：主手对自己的活牛在24 tick内连点三次，单次间隔不得超过12 tick；同tick重复包、INTERACT_AT与副手不叠加计数；换牛、喂食、潜行、超时重置。距离检查6格内；命令 /supercow gui 仍可直接打开。干草喂食保留。此处按三次右键实现，而非六次点击。
+- GUI：Lore显示双方距离、维度、坐标、实时血量/经验/击杀/模式、目标详情、狂暴、实际普攻剩余冷却与配置间隔；每20 tick仅同步变化槽。新增刷新8、目标43、冷却44、最近操作49，保留4页技能与原交互；GUI操作反馈只存Lore，不再写ActionBar。PREDICTED_CARRIED同步机制保留。
+- 头顶：成功释放统一入口executeNamedAttack通知，显示“超级牛 Lv.N | 技能名”，最近释放短显40 tick，过期恢复；飞天实际活动期间优先显示飞天。只在文字改变时更新实体metadata，非每tick强推。仅显示最新一次释放，不代表所有召唤物/持续特效都在2秒内结束。
+- API（CombatManager，服务器线程，UUID为主人）：getCurrentSkillId、getCurrentSkillRemainingTicks、getAttackCooldownRemainingTicks、notifySkillTriggered。
+- 验证：/tmp/sc-ui-final-client3.log 记录 UI_COMBAT_SMOKE_PASS：单次/两次不打开，第三次打开（含双包/副手去重）、超时重置、距离Lore自动更新、操作反馈在Lore、铁砧头顶名与自动恢复。实际8次命中，间隔1199/1201/1249/1151/1199/1201/1199ms，中位1199ms。早期用箭实体数计频失败是牛近身转为近战，随后改用受害者health metadata；第二次采样受铁砧击飞干扰，最终等特效结束并重置站位后通过。
+- 最终构建 /tmp/sc-ui-release-build.log BUILD SUCCESSFUL，Java测试NO-SOURCE；两个子任务编译/配置迁移检查通过。脚本 scripts/ui-combat-smoke.js（需 SC_TEST_MUTATIONS=1、mineflayer、OP宠物和平坦y200地板），会修改测试角色库存、模式与配置，务必先备份，禁止生产服。
+- 测试原properties/config备份 /tmp/sc-ui-original.properties、/tmp/sc-ui-original-config.json，已恢复原world/default并重启；schema3旧默认自动迁移属于预期，测试中全关技能与临时跟随距离不应残留。测试最终启动日志 /tmp/sc-ui-restored-server.log。
+
+- 补充回归限制：恢复原测试世界后尝试只读检查四页技能（/tmp/sc-ui-pages2.log），/supercow call 提示宠物已在身边，但 GUI 在等待窗口内未保持打开；伴随原世界区块加载警告与反复脱困提示。本轮不将这次分页检查计为通过，未据此修改逻辑。三次点击、Lore实时更新、头顶与攻速证据来自隔离平坦世界的最终完整通过测试。
+
+## 7. 1.0.2 发布候选（2026-10-19）
+
+- 本节覆盖§6旧参数：schema4，普通14tick/0.7秒、狂暴12tick/0.6秒（战斗每2tick运行），基础伤害1.2/每级0.12，箭1.0/1.5；特殊概率0.055/0.12维持实体负载，独立技能CD仍120。近战额外击退0.25/0.15→0.12/0.05，减少追停。保留无敌帧。
+- 真实客户端缺陷修复：Lore每行使用Component.Serializer.toJson；原来的字符串检查不能证明原版客户端能显示，现测试用prismarine-nbt提取并JSON.parse所有Lore。面板远距不再因24格限制立刻关闭（仍验证主人UUID与宠物存活）；分页命令优先setPage；关闭用明确tick标记，非server.execute同步执行；仅普通/shift左右键触发操作；全服共享配置按钮限制权限2。
+- 三次右键是服务端三次有效主手交互。原版不提供按键松开事件，长按自动重复也可能达到三次，不能承诺区分三次物理按下。
+- 双只读审查均结束；最终构建 /tmp/sc-102-final-build.log 成功，迁移Java断言MIGRATION_PASS（schema2/3旧默认、custom保留、幂等）。
+- /tmp/sc-102-smoke.log：完整UI_COMBAT_SMOKE_PASS，全部92介绍/4页JSON Lore、远距面板保持、延迟关闭、三连防误触/超时/副手去重、实时Lore、头顶提示与恢复。普通实际14次命中，间隔698~701ms，中位700ms。测试与最终构建SHA256相同9d609fecd85ca40b92ca41f482c65d3837e9bc30a1fe747131674bccf0135509。未声称所有技能伤害统一降低或多人高负载覆盖。
+- 测试环境已恢复原properties与config（/tmp/sc-102-test.properties、/tmp/sc-102-test-config.json）；/tmp/sc-102-test-restored.log。生产部署日志 /tmp/sc-deploy-1.0.2.log，平滑save-all/stop、先备份JAR与配置，启动后还需确认日志/端口。
+
+### 1.0.2 正式部署验证
+- 正式服已平滑更新并启动：/opt/hf/final-paradox-1.16.5，tmux16:0.0，生产PID372073，25565监听，18:37:31 Done(2.331s)，加载supercow1.0.2。备份 /opt/hf/final-paradox-1.16.5/backups/supercow-pre-1.0.2-20261019-183711/ 含旧1.0.1 JAR和原配置；新JAR与测试一致SHA256 9d609fecd85ca40b92ca41f482c65d3837e9bc30a1fe747131674bccf0135509。schema4迁移旧默认，保留生产自选followDistance=3。
+- 原测试世界补测四页已通过 /tmp/sc-102-default-pages.log GUI_PAGES_PASS（27/27/27/11），覆盖§6中此前未通过的额外分页项。原世界仍有区块/窒息等独立异常，不将其宣称为存档修复。
+- 发布tag 1.0.2-1.16.5，GitHub Release附二进制与sources；发布结果以GitHub及 /tmp/sc-publish-1.0.2.log 为准。回滚：平滑stop后将当前1.0.2 JAR移出mods，恢复备份1.0.1 JAR及config，再./start.sh；不要让两个supercow JAR同时留在mods。

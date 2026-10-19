@@ -18,6 +18,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.animal.Cow;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
@@ -64,6 +65,9 @@ public final class PetGui {
     private static final int SLOT_SUMMON_MODE = 5;
     private static final int SLOT_QUIRK = 6;
     private static final int SLOT_FOLLOW = 7;
+    private static final int SLOT_REFRESH = 8;
+    private static final int SLOT_TARGET = 43;
+    private static final int SLOT_COOLDOWNS = 44;
     private static final int SLOT_HEAL = 36;
     private static final int SLOT_RECALL = 37;
     private static final int SLOT_CALL = 38;
@@ -154,6 +158,10 @@ public final class PetGui {
 
     public static final class PetMenu extends ChestMenu {
         private boolean configDirty;
+        private boolean refreshing;
+        private long lastRefreshTick = Long.MIN_VALUE;
+        private long closeRequestedTick = Long.MIN_VALUE;
+        private String lastFeedback = "§7点击按钮后在这里查看操作结果";
         private final SimpleContainer container;
         private final UUID petUuid;
         private final UUID ownerUuid;
@@ -175,7 +183,28 @@ public final class PetGui {
                 return false;
             }
             Entity pet = petEntity(player, petUuid);
-            return pet instanceof Cow && pet.isAlive() && player.distanceToSqr(pet) <= 24.0D * 24.0D;
+            return pet instanceof Cow && pet.isAlive(); // Owner control panel remains usable while the pet moves.
+        }
+
+        /** ServerPlayer calls this every tick; only rebuild live lore once per second. */
+        @Override
+        public void broadcastChanges() {
+            if (refreshing) {
+                return;
+            }
+            SuperCowMod mod = SuperCowMod.getInstance();
+            if (container != null && viewer != null && viewer.containerMenu == this && mod != null) {
+                long now = mod.getServerTicks();
+                if (closeRequestedTick != Long.MIN_VALUE && now > closeRequestedTick) {
+                    viewer.closeContainer();
+                    return;
+                }
+                if (lastRefreshTick == Long.MIN_VALUE || now - lastRefreshTick >= 20L) {
+                    refresh();
+                }
+            }
+            // Vanilla compares stacks before sending changed slots, preserving the carried stack.
+            super.broadcastChanges();
         }
 
         @Override
@@ -218,8 +247,14 @@ public final class PetGui {
                 return sp.inventory.getCarried();
             }
             ItemStack predicted = takePredictedCarried(sp);
+            if (!ownerUuid.equals(sp.getUUID())) {
+                pushContents(sp);
+                return predicted;
+            }
             if (slotId >= 0 && slotId < SIZE) {
-                handleClick(slotId, button, sp);
+                if ((type == ClickType.PICKUP || type == ClickType.QUICK_MOVE) && (button == 0 || button == 1)) {
+                    handleClick(slotId, button, sp);
+                }
                 if (sp.containerMenu == this) {
                     refresh();
                     pushContents(sp);
@@ -250,10 +285,15 @@ public final class PetGui {
             // setItem. Rebuilding 54 slots would otherwise push half-baked packets to the client
             // (icons flickering / appearing one click late), so writes are made silent and the
             // finished panel is pushed once at the end.
+            if (refreshing) {
+                return;
+            }
+            refreshing = true;
             try {
                 renderPanel();
+                lastRefreshTick = SuperCowMod.getInstance().getServerTicks();
             } finally {
-                // nothing to re-arm: the panel content is pushed explicitly by pushContents()
+                refreshing = false;
             }
         }
 
@@ -266,6 +306,14 @@ public final class PetGui {
             PetData data = mod.getPetData(ownerUuid);
             Entity entity = containerLevelEntity();
             Cow pet = entity instanceof Cow ? (Cow) entity : null;
+            LivingEntity target = mod.getCombatManager().getCurrentTarget(ownerUuid);
+            boolean raging = mod.getCombatManager().isInRageMode(ownerUuid);
+            String currentSkill = mod.getCombatManager().getCurrentSkillId(ownerUuid);
+            if (pet != null && mod.getPathfindingManager().isSpiraling(pet.getUUID())) {
+                currentSkill = Skills.SKY_SPIRAL;
+            }
+            double health = pet != null ? pet.getHealth() : data != null ? data.currentHealth : 0.0D;
+            double maxHealth = pet != null ? pet.getMaxHealth() : data != null ? data.maxHealth : 0.0D;
 
             clear();
             for (int i = 0; i < SIZE; i++) {
@@ -275,7 +323,7 @@ public final class PetGui {
             String levelText = data != null ? ("Lv." + data.level) : "无宠物";
             List<String> info = new ArrayList<>();
             if (data != null) {
-                info.add("§7生命：§f" + String.format("%.1f", data.currentHealth) + " / " + String.format("%.1f", data.maxHealth));
+                info.add("§7生命：§f" + decimal(health) + " / " + decimal(maxHealth));
                 info.add("§7经验：§f" + data.exp + " / " + mod.expNeeded(data.level));
                 info.add("§7累计击杀：§f" + data.totalKills);
                 info.add("§7状态：§f" + (data.isAlive ? "存活" : "阵亡（等待复活）"));
@@ -284,12 +332,11 @@ public final class PetGui {
             } else {
                 info.add("§7还没有宠物牛");
             }
-            List<String> summary = new ArrayList<>();
-            summary.add("§7" + String.format("%.1f", data != null ? data.currentHealth : 0.0D) + " / "
-                + String.format("%.1f", data != null ? data.maxHealth : 0.0D) + " HP");
-            summary.add("§7EXP " + (data != null ? data.exp : 0) + " / " + (data != null ? mod.expNeeded(data.level) : 0));
-            summary.add("§7击杀 " + (data != null ? data.totalKills : 0));
-            summary.add("§8点击刷新状态");
+            List<String> summary = new ArrayList<>(info);
+            summary.add("§7主人：§f" + viewer.getName().getString());
+            summary.add("§7主人 ↔ 牛：§f" + distanceLabel(viewer, pet));
+            summary.add("§8生命优先使用实体实时值；未加载时使用记录值");
+            summary.add("§8点击刷新 · 打开期间每20 tick自动更新");
             container.setItem(0, make(Items.COW_SPAWN_EGG, "§6§l超级牛 §e" + levelText, summary));
 
             int enabled = 0;
@@ -302,18 +349,28 @@ public final class PetGui {
                 java.util.Arrays.asList("§7已启用：§f" + enabled + " / " + Skills.all().size(),
                     "§7左键 = 全部开启", "§7右键 = 全部关闭",
                     "§7共 " + pageCount() + " 页，每页 " + SKILLS_PER_PAGE + " 个")));
-            container.setItem(2, make(Items.GOLDEN_APPLE, "§d宠物状态",
-                java.util.Arrays.asList("§7存活：" + (pet != null && pet.isAlive() ? "§a是" : "§c否"),
-                    "§7坐标：" + (pet != null ? String.format("§f%.0f, %.0f, %.0f", pet.getX(), pet.getY(), pet.getZ()) : "§7-"))));
+            container.setItem(2, make(Items.COMPASS, "§d位置与距离",
+                java.util.Arrays.asList(
+                    "§7主人 ↔ 牛：§f" + distanceLabel(viewer, pet),
+                    "§7主人维度：§f" + dimensionLabel(viewer),
+                    "§7牛的维度：§f" + dimensionLabel(pet),
+                    "§7牛的坐标：§f" + positionLabel(pet),
+                    "§7主人坐标：§f" + positionLabel(viewer),
+                    "§7实体状态：" + (pet != null && pet.isAlive() ? "§a已加载 / 存活" : "§7未加载或已离场"),
+                    "§8不同维度不计算直线距离；点击刷新")));
             container.setItem(3, make(Items.PAPER, "§e使用说明 §8(只读)",
-                java.util.Arrays.asList("§7右键宠物牛打开本面板，潜行右键看文字信息", "§7手里拿干草块右键 = 喂食",
-                    "§7第一排：宠物信息 / 技能开关(左键全开 右键全关) / 宠物状态(左键刷新) / 本页",
-                    "§7第二~四排：技能格，左键开 / 右键关；第 41/42 格是上/下一页",
-                    "§7最下一排：战斗模式 / 召唤模式 / 技能风格 / 治疗 / 召回 / 召唤 / 全开 / 全关 / 上页 / 下页 / 关闭")));
+                java.util.Arrays.asList("§7连续右键自己的牛三次 = 打开面板", "§7手里拿干草块右键 = 喂食",
+                    "§7顶部：信息 / 技能总开关 / 位置 / 模式 / 跟随 / 刷新",
+                    "§7第二~四排：左键切换技能，右键关闭",
+                    "§7操作排：治疗 / 收回 / 召回身边 / 全开 / 全关 / 翻页",
+                    "§7目标和冷却图标：点击手动刷新详情",
+                    "§8距离、生命和目标每20 tick自动刷新，无需重开")));
 
             container.setItem(SLOT_MODE, make(Items.SHIELD,
                 "§b战斗模式 §f" + (data != null ? PetMode.fromString(data.combatMode).getDisplayName() : "-"),
                 java.util.Arrays.asList("§7当前：§f" + (data != null ? PetMode.fromString(data.combatMode).getDisplayName() : "-"),
+                    "§7狂暴状态：" + (raging ? "§c生效中" : "§7未生效"),
+                    "§7当前目标：§f" + (target != null ? target.getName().getString() : "无"),
                     "§7点击切换")));
             container.setItem(SLOT_SUMMON_MODE, make(Items.WHEAT,
                 "§b召唤模式 §f" + (data != null ? SummonMode.fromString(data.summonMode).getDisplayName() : "-"),
@@ -327,6 +384,7 @@ public final class PetGui {
             container.setItem(SLOT_FOLLOW, make(Items.LEAD,
                 "§b跟随范围 §f" + followRangeLabel(cfg),
                 java.util.Arrays.asList(
+                    "§7当前主人 ↔ 牛：§f" + distanceLabel(viewer, pet),
                     "§f" + String.format("%.1f", cfg.followDistance) + "§7 格：牛停在离你这么远的地方",
                     "§8左键 = 更远 / 右键 = 更近（2 ~ 24 格）",
                     "§8远一点，牛走路的声音就离你远一点",
@@ -380,12 +438,69 @@ public final class PetGui {
                     "§7Sneak + 左键 = 跳到最后一页",
                     "§8可用 /supercow gui <页码> 直接跳转")));
 
-            container.setItem(SLOT_HEAL, make(Items.GOLDEN_CARROT, "§a治疗宠物", java.util.Collections.singletonList("§7把生命补满")));
+            container.setItem(SLOT_REFRESH, make(Items.CLOCK, "§b刷新面板",
+                java.util.Arrays.asList("§7点击立即更新距离、生命、目标与冷却说明",
+                    "§7自动刷新：每20 tick（正常约1秒）",
+                    "§7保持当前技能页，不改变技能与战斗模式")));
+            List<String> targetLore = new ArrayList<>();
+            targetLore.add("§7目标：§f" + (target != null ? target.getName().getString() : "无（跟随 / 待命）"));
+            if (target != null) {
+                targetLore.add("§7目标生命：§f" + decimal(target.getHealth()) + " / " + decimal(target.getMaxHealth()));
+                targetLore.add("§7牛 ↔ 目标：§f" + distanceLabel(pet, target));
+                targetLore.add("§7主人 ↔ 目标：§f" + distanceLabel(viewer, target));
+                targetLore.add("§7目标维度：§f" + dimensionLabel(target));
+            }
+            targetLore.add("§8点击刷新（只读，不强制切换目标）");
+            container.setItem(SLOT_TARGET, make(Items.BOW, "§c战斗目标", targetLore));
+            container.setItem(SLOT_COOLDOWNS, make(Items.CLOCK, "§e冷却与战斗节奏",
+                java.util.Arrays.asList(
+                    "§7当前/最近释放：§b" + (currentSkill == null ? "无（待命）" : Skills.displayOf(currentSkill)),
+                    "§7普攻剩余冷却：§f" + seconds(mod.getCombatManager().getAttackCooldownRemainingTicks(ownerUuid)),
+                    "§7当前普攻间隔：§f" + seconds(Math.max(11, raging ? cfg.rageAttackCooldownTicks : cfg.attackCooldownTicks)),
+                    "§7特殊攻击间隔：§f" + seconds(cfg.specialAttackCooldownTicks),
+                    "§7召唤间隔：§f" + seconds(cfg.summonCooldownTicks),
+                    "§7喂食间隔：§f" + seconds(cfg.feedCooldownTicks),
+                    "§7狂暴：" + (raging ? "§c生效中" : "§7未生效"),
+                    "§8普攻剩余时间为实时值；其它显示配置间隔",
+                    "§8技能名短暂展示最近释放；点击刷新")));
+            container.setItem(49, make(Items.PAPER, "§f最近操作",
+                java.util.Arrays.asList(lastFeedback, "§8操作结果保留在此，刷新不会清除")));
+            container.setItem(SLOT_HEAL, make(Items.GOLDEN_CARROT, "§a治疗宠物",
+                java.util.Arrays.asList("§7当前生命：§f" + decimal(health) + " / " + decimal(maxHealth), "§7点击把生命补满")));
             container.setItem(SLOT_RECALL, make(Items.LEAD, "§e收回宠物", java.util.Collections.singletonList("§7宠物回到待命")));
-            container.setItem(SLOT_CALL, make(Items.ENDER_EYE, "§e召唤到身边", java.util.Collections.singletonList("§7把宠物传送到你脚下")));
+            container.setItem(SLOT_CALL, make(Items.ENDER_EYE, "§e召回到身边",
+                java.util.Arrays.asList("§7主人 ↔ 牛：§f" + distanceLabel(viewer, pet),
+                    "§7点击把当前宠物传送到你脚下", "§8不会重新生成宠物或改变战斗模式")));
             container.setItem(SLOT_ALL_ON, make(Items.LIME_DYE, "§a全部开启", java.util.Collections.singletonList("§7所有技能重新启用")));
             container.setItem(SLOT_ALL_OFF, make(Items.GRAY_DYE, "§c全部关闭", java.util.Collections.singletonList("§7只保留近战和自动索敌")));
             container.setItem(SLOT_CLOSE, make(Items.BARRIER, "§c关闭", java.util.Collections.singletonList("§7也可以直接按 ESC")));
+        }
+
+        private static String decimal(double value) {
+            return String.format(java.util.Locale.ROOT, "%.1f", value);
+        }
+
+        private static String seconds(int ticks) {
+            return decimal(Math.max(0, ticks) / 20.0D) + " 秒";
+        }
+
+        private static String distanceLabel(Entity from, Entity to) {
+            if (from == null || to == null) {
+                return "不可用（实体未加载）";
+            }
+            if (from.level != to.level) {
+                return "不同维度（不可比较）";
+            }
+            return decimal(Math.sqrt(from.distanceToSqr(to))) + " 格";
+        }
+
+        private static String dimensionLabel(Entity entity) {
+            return entity != null ? entity.level.dimension().location().toString() : "未知（实体未加载）";
+        }
+
+        private static String positionLabel(Entity entity) {
+            return entity != null ? String.format(java.util.Locale.ROOT, "%.1f, %.1f, %.1f",
+                entity.getX(), entity.getY(), entity.getZ()) : "未知（实体未加载）";
         }
 
         private Entity containerLevelEntity() {
@@ -437,6 +552,11 @@ public final class PetGui {
 
             int skillIndex = slot >= SKILL_START && slot < SKILL_START + SKILLS_PER_PAGE
                 ? skillPage * SKILLS_PER_PAGE + (slot - SKILL_START) : -1;
+            if ((skillIndex >= 0 && skillIndex < skills.size() || slot == 1 || slot == SLOT_ALL_ON
+                || slot == SLOT_ALL_OFF || slot == SLOT_QUIRK || slot == SLOT_FOLLOW) && !player.hasPermissions(2)) {
+                tell(player, "§c这是全服共享设置，需要管理员权限；个人模式和召回仍可使用");
+                return;
+            }
             if (skillIndex >= 0 && skillIndex < skills.size()) {
                 Skills.Skill skill = skills.get(skillIndex);
                 // Left click toggles, right click forces "off" (== a clear "this one is disabled").
@@ -444,6 +564,11 @@ public final class PetGui {
                 cfg.setSkillEnabled(skill.id, now);
                 configDirty = true;
                 tell(player, "技能 §f" + skill.display + (now ? " §a开启" : " §c关闭"));
+                return;
+            }
+
+            if (slot == SLOT_REFRESH || slot == SLOT_TARGET || slot == SLOT_COOLDOWNS) {
+                tell(player, "§a已刷新面板，悬停物品查看最新状态");
                 return;
             }
 
@@ -563,24 +688,13 @@ public final class PetGui {
          * go out, and only then does the close packet follow.</p>
          */
         private void closeNextTick(final ServerPlayer player) {
-            final net.minecraft.server.MinecraftServer server = player.server;
-            if (server == null) {
-                player.closeContainer();
-                return;
-            }
-            server.execute(new Runnable() {
-                @Override
-                public void run() {
-                    if (player.containerMenu == PetMenu.this) {
-                        player.closeContainer();
-                    }
-                }
-            });
+            SuperCowMod mod = SuperCowMod.getInstance();
+            if (mod != null) closeRequestedTick = mod.getServerTicks();
         }
 
-        /** Action bar feedback so every click visibly does something. */
+        /** Keep panel feedback in the panel, not in the player's action bar. */
         private void tell(ServerPlayer player, String text) {
-            player.displayClientMessage(new TextComponent(text), true);
+            lastFeedback = text;
         }
 
         private static PetMode nextMode(PetMode mode) {
@@ -641,7 +755,7 @@ public final class PetGui {
                 CompoundTag display = stack.getOrCreateTagElement("display");
                 ListTag list = new ListTag();
                 for (String line : lore) {
-                    list.add(StringTag.valueOf(line));
+                    list.add(StringTag.valueOf(net.minecraft.network.chat.Component.Serializer.toJson(new TextComponent(line))));
                 }
                 display.put("Lore", list);
             }
