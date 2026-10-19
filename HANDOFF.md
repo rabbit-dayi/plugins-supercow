@@ -6,6 +6,8 @@
 
 ## 0. 一句话现状
 
+本次第三弹开发：全部 **92 个技能**均有专属趣味小介绍，GUI 悬浮说明、技能列表与强制释放反馈同步展示；新增 **30 个抽象机关技能**（91 个参与抽卡，转圈飞天不抽卡），GUI 共 4 页。本轮发布版本为 **1.0.1**，生产服已平滑重启并加载新版本；Git 分支为 fabric-1.16.5，Release 标签为 1.0.1-1.16.5。下方原有记录保留为历史验证背景。
+
 本轮五项需求（**跟随范围默认改远至 20 格并提供远/中/近档位 + 平滑刹车防抖**、**启动与 Tick 性能调优**、**新增 40 个技能**、**新增「活塞草羊机」技能一下子把敌人顶飞**、**面板多页翻页与命令树动态注册**）已全部实现、清除全部调试插桩、编译通过，并在测试服完成跟随距离与全 62 个技能实机验证。
 
 ---
@@ -52,3 +54,31 @@
 - **跟随距离实测**：玩家位于 `(296.5, 78, -5.5)`，宠物牛位于 `(296.5, 78, -33.0)`（初始距离 27.5 格 > 起步阈值 24.0 格）。宠物牛以 `0.42 -> 0.409 -> 0.366 -> 0.303 -> 0.0` 平滑减速走近，最终稳稳停在 `z = -25.16`（距玩家 **19.66 格**，紧贴 `followDistance = 20.0`），无抖腿、无倒走、无冲到贴身。
 - **全技能冒烟实测**：62 个技能通过 `/supercow skill <id>` 逐一触发（含 `piston_sheep_machine`），服务端日志零异常。
 - **调试插桩清理**：`DEBUG_TICK`、`DEBUG_FOLLOW`、`SCTRACE`、`SCFOLLOW` 等临时日志与调试子命令已全部移除。
+
+
+## 4. 第三弹：小介绍与 30 个抽象机关技能
+
+- 注册元数据在 Skills.java；新增铁砧断头台、彩虹羊大炮、烫手山芋、钓竿抓娃娃机、史莱姆弹球机、村民拍卖会、末地烛钻头机、加特林坤坤机、秋名山飞船、苦力怕虚晃一枪、河豚刺雷阵、蹦床充气堡、鱿鱼喷墨打印机、铁傀儡正骨师、羊驼口水加农炮、熊猫保龄球、猫猫踩键盘、矿车过山车、绿龟壳弹射、狐狸偷菜夹、雪人破壁料理机、飞天猪猪外卖、女巫孟婆汤、骷髅爵士乐队、末影人搬家公司、北极熊大逼兜、蠹虫挠痒痒机、海豚冲浪板、哞菇浓汤高压锅、蝙蝠外星飞碟。
+- QuirkSkills.contraption 统一生命周期，各技能独立轨迹、节拍、粒子与击退/状态效果；每次最多 4 个装饰实体，任务总量上限 96，新技能运行 50–80 tick，三连击在 16/32/48 tick，最低时长不得低于 49 tick。
+- 铁砧、床、钓竿、末地烛与载具使用盔甲架物品投影；不放置真实方块、不生成可乘坐载具、不调用真实爆炸或传送敌人进入方块。
+- 装饰实体带 supercow_quirk_actor，NoAI/noGravity/noPhysics，SkillCleanup.track 托管，结束立即移除并有 TTL/孤儿扫描兜底；目标过滤排除装饰实体，新技能额外拒绝玩家受害者。
+- onLivingEntityHurt 阻止装饰实体原生接触伤害；交互包先转服务端线程，再阻止挤奶/剪毛/交易/骑乘等交互。SnowGolemMixin 专门阻止装饰雪人原生铺雪（仅 NoAI 不够）。
+- 冒烟脚本 scripts/wave3-smoke.js：需 mineflayer@4、测试服 OP 用户已有宠物；NODE_PATH=/tmp/bot/node_modules node scripts/wave3-smoke.js。默认端口 25566、用户名 TestBot，可用 SC_TEST_PORT / SC_TEST_USER 覆盖；只允许在测试服运行。
+- 首次实机验证：4 页 GUI 共 92 个技能的介绍均存在，30 个新增技能逐一释放成功，结束后活动技能实体 0；服务端无技能异常。Gradle build --offline 成功（项目暂无 Java 单元测试，test NO-SOURCE）。
+
+### 最终构建验证
+
+- 最终测试服 JAR SHA-256：819288dff9c846e1700e7b7a15b2736360decead575340fbfd85286142383c1b，与 build/libs 产物一致；仅测试服 25566 更新。
+- 最终服务端启动 Done (2.430s)，日志 /tmp/sc-wave3-final-server.log；最终全量冒烟 /tmp/sc-wave3-final-smoke.log 记录 SMOKE_PASS：92 技能、30 次新增技能逐一释放、4 页 GUI，结束活动实体 0。
+- 附加回归：装饰小牛交互/攻击不产奶、不被取物，过期自动清理，服务端无 packet-handler 异步异常；测试前需清除角色旧 milk_bucket 库存，避免基线误报。
+- 时长边界回归：quirkSkillDurationTicks=20、48、80 时，铁砧三连击均将无甲 200 血尸壳降至 194；通过同步实体 health metadata 验证（测试服 sendCommandFeedback=false，/data 命令成功结果不显示）。已恢复测试服配置与内存时长为 80。
+- git diff --check 与 node --check scripts/wave3-smoke.js 通过。尚未 commit/push、未覆盖旧 Release、未改生产服。
+
+## 5. 1.0.1 生产发布（2026-10-19）
+
+- gradle.properties 的 mod_version 更新至 1.0.1，离线 build 成功；全部 89 个 class 与实机验证过的第三弹产物逐字节一致，仅版本资源变化。
+- 生产服 /opt/hf/final-paradox-1.16.5 已通过 tmux 16:0.0 stop 平滑关服、备份旧包、替换并 ./start.sh 重启。仅保留 supercow-fabric-1.16.5-1.0.1.jar，避免重复 mod ID。
+- 旧 JAR 与配置备份：/opt/hf/final-paradox-1.16.5/backups/supercow-pre-1.0.1-20261019/。
+- 生产新包 SHA-256：b3cbc2173ac4fc2d73eef040860fcf9441e0aba9f4c6fb00357d9c74ee9c2676，与 build/libs 产物一致。
+- 发布采用新补丁标签 1.0.1-1.16.5，保留旧 1.0.0-1.16.5 标签与下载包；安装时只放正式 JAR，不装 sources.jar。
+- /root/deploy_sc.sh 的旧辅助脚本仍硬编码 1.0.0 文件名，不要直接用于新版本；本轮部署脚本 /tmp/sc-prod-1.0.1-deploy.sh 是一次性操作，不可重复运行。

@@ -556,6 +556,13 @@ public class SuperCowMod implements ModInitializer {
             return true;
         }
 
+        // Decorative actors (including slime/fish) must never deal native contact damage.
+        // All scripted hits originate from the actual pet and pass TargetValidator.
+        if (attacker.getTags().contains("supercow_quirk_actor")
+            || (source.getDirectEntity() != null && source.getDirectEntity().getTags().contains("supercow_quirk_actor"))) {
+            return false;
+        }
+
         // Never let a SuperCow pet, summon, projectile or special attack hurt its own owner
         UUID victimOwner = null;
         if (self instanceof Player) {
@@ -1287,6 +1294,9 @@ public class SuperCowMod implements ModInitializer {
                     + "\u00A7e" + sk.id + " \u00A7f" + sk.display + " \u00A78"
                     + (sk.rollable ? ("w" + sk.weightNormal + "/" + sk.weightRage) : "\u4E0D\u62BD\u5361")
                     + " \u00A77" + sk.hint), owner);
+                if (sk.intro != null && !sk.intro.isEmpty()) {
+                    p.sendMessage(new TextComponent("   \u00A76\u25B8 \u00A77" + sk.intro), owner);
+                }
             }
             if (pages > 1) {
                 int rest = all.size() - perPage;
@@ -1317,6 +1327,9 @@ public class SuperCowMod implements ModInitializer {
                 Skills.Skill sk = all.get(i);
                 p.sendMessage(new TextComponent((cfg.isSkillEnabled(sk.id) ? "\u00A7a\u2714 " : "\u00A7c\u2718 ")
                     + "\u00A7e" + sk.id + " \u00A7f" + sk.display + " \u00A77" + sk.hint), owner);
+                if (sk.intro != null && !sk.intro.isEmpty()) {
+                    p.sendMessage(new TextComponent("   \u00A76\u25B8 \u00A77" + sk.intro), owner);
+                }
             }
             return 1;
         }
@@ -1342,7 +1355,12 @@ public class SuperCowMod implements ModInitializer {
                 p.sendMessage(new TextComponent("\u00A7c[\u8D85\u7EA7\u725B] \u9644\u8FD1\u6CA1\u6709\u53EF\u653B\u51FB\u7684\u76EE\u6807\u3002"), p.getUUID());
                 return 0;
             }
-            p.sendMessage(new TextComponent("\u00A7a[\u8D85\u7EA7\u725B] \u91CA\u653E\u6280\u80FD\uFF1A\u00A7e" + skill), p.getUUID());
+            Skills.Skill meta = Skills.byId(skill);
+            String title = meta != null ? (meta.display + " \u00A78(" + skill + ")") : skill;
+            p.sendMessage(new TextComponent("\u00A7a[\u8D85\u7EA7\u725B] \u91CA\u653E\u6280\u80FD\uFF1A\u00A7e" + title), p.getUUID());
+            if (meta != null && meta.intro != null && !meta.intro.isEmpty()) {
+                p.sendMessage(new TextComponent("\u00A76\u25B8 \u00A77" + meta.intro), p.getUUID());
+            }
             return 1;
         }
 

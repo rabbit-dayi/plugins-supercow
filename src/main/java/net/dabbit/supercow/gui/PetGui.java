@@ -349,14 +349,22 @@ public final class PetGui {
                 Skills.Skill skill = skills.get(index);
                 boolean on = cfg.isSkillEnabled(skill.id);
                 List<String> lore = new ArrayList<>();
-                lore.add("§7" + skill.hint);
+                for (String line : wrapLore(skill.hint, 22)) {
+                    lore.add("§7" + line);
+                }
+                if (skill.intro != null && !skill.intro.isEmpty() && !skill.intro.equals(skill.hint)) {
+                    for (String line : wrapLore(skill.intro, 22)) {
+                        lore.add("§6▸ §f" + line);
+                    }
+                }
                 if (skill.rollable) {
                     lore.add("§8权重：普通 " + skill.weightNormal + " / 狂暴 " + skill.weightRage);
                 } else {
                     lore.add("§8不参与随机抽卡");
                 }
                 lore.add(on ? "§a状态：开启 §8(点击关闭)" : "§c状态：关闭 §8(点击开启)");
-                lore.add("§8序号 " + (index + 1) + " / " + skills.size() + " · 第 " + (skillPage + 1) + "/" + pages + " 页");
+                lore.add("§8ID: " + skill.id);
+                lore.add("§8序号 " + (index + 1) + "/" + skills.size() + " · 第" + (skillPage + 1) + "/" + pages + "页");
                 container.setItem(slot, make(on ? Items.LIME_DYE : Items.GRAY_DYE,
                     (on ? "§a✔ " : "§7✘ ") + skill.display, lore));
             }
@@ -606,6 +614,21 @@ public final class PetGui {
         }
 
         // ------------------------------------------------------------ item helpers
+
+        private static List<String> wrapLore(String text, int maxLen) {
+            List<String> out = new ArrayList<>();
+            if (text == null || text.isEmpty()) {
+                return out;
+            }
+            int i = 0;
+            int n = text.length();
+            while (i < n) {
+                int end = Math.min(n, i + maxLen);
+                out.add(text.substring(i, end));
+                i = end;
+            }
+            return out;
+        }
 
         private static ItemStack filler() {
             return make(Items.GRAY_STAINED_GLASS_PANE, " ", java.util.Collections.emptyList());

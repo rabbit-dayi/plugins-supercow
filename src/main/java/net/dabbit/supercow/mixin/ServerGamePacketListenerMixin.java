@@ -48,6 +48,14 @@ public class ServerGamePacketListenerMixin {
         if (player == null || player.level == null || player.level.isClientSide) {
             return;
         }
+        // Vanilla normally hands off after HEAD; our early cancellation must do it too.
+        net.minecraft.network.protocol.PacketUtils.ensureRunningOnSameThread(packet,
+            (ServerGamePacketListenerImpl) (Object) this, player.getLevel());
+        Entity decorative = packet.getTarget(player.level);
+        if (decorative != null && decorative.getTags().contains("supercow_quirk_actor")) {
+            ci.cancel(); // No milking, shearing, trading, saddling or looting temporary actors.
+            return;
+        }
         if (packet.getAction() != ServerboundInteractPacket.Action.INTERACT) {
             return;
         }

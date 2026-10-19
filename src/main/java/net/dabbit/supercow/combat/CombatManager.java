@@ -73,8 +73,8 @@ public class CombatManager {
     // Reusable scratch buffers for rollWeightedSkill (attack hot path: no per-attack allocation).
     private java.util.List<Skills.Skill> rollScratchState;
     private Skills.Skill[] rollScratchAll = new Skills.Skill[0];
-    private Skills.Skill[] rollPoolNormal = new Skills.Skill[96];
-    private Skills.Skill[] rollPoolRage = new Skills.Skill[96];
+    private Skills.Skill[] rollPoolNormal = new Skills.Skill[160];
+    private Skills.Skill[] rollPoolRage = new Skills.Skill[160];
 
     private final Map<UUID, PetMode> petModes = new HashMap<>();
     private final Map<UUID, LivingEntity> currentTargets = new HashMap<>();

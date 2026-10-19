@@ -41,13 +41,13 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * The quirk skill library: the ten original "abstract" skills plus the forty of the 第二弹 batch.
+ * The quirk skill library: the original ten, 41 second-wave and 30 third-wave skills.
  *
  * Every skill either finishes inside {@code quirkSkillDurationTicks} or spawns entities that are
  * registered in {@link SkillCleanup}, so nothing is left behind in the world (hard requirement).
  * Damage is deliberately low; these are flavour skills, not damage skills.
  *
- * Rules this class keeps for all fifty skills:
+ * Rules shared by the skill library:
  * <ul>
  *   <li>every spawned entity is tracked by SkillCleanup with the owner uuid,</li>
  *   <li>aoe picks victims through TargetValidator (never the owner, never a pet),</li>
@@ -83,6 +83,14 @@ public final class QuirkSkills {
         "milk_rain_blessing", "cow_disguise", "moo_chorus", "herd_dance", "bell_toll", "milk_fountain",
         "piston_sheep_machine");
 
+    private static final Set<String> WAVE_THREE = setOf(
+        "anvil_guillotine", "sheep_rainbow_cannon", "tnt_hot_potato", "fishing_crane", "slime_pinball",
+        "villager_auction", "end_rod_drill", "chicken_gatling", "boat_drift", "creeper_fakeout",
+        "pufferfish_minefield", "bed_bounce_castle", "squid_ink_printer", "golem_chiropractor", "llama_spit_turret",
+        "panda_bowling", "cat_keyboard_walker", "minecart_rollercoaster", "turtle_spinning_shell", "fox_berry_trap",
+        "snowman_blender", "pig_rocket_express", "witch_cauldron_soup", "skeleton_jazz_band", "enderman_moving_company",
+        "polar_bear_slap", "silverfish_tickle_pit", "dolphin_surfboard", "mooshroom_nuclear_stew", "bat_ufo_abduction");
+
     private QuirkSkills() {
     }
 
@@ -91,7 +99,7 @@ public final class QuirkSkills {
             return false;
         }
         String id = skillId.toLowerCase();
-        return WAVE_ONE.contains(id) || WAVE_TWO.contains(id);
+        return WAVE_ONE.contains(id) || WAVE_TWO.contains(id) || WAVE_THREE.contains(id);
     }
 
     public static boolean cast(ServerLevel level, Cow pet, UUID ownerUuid, LivingEntity target, boolean rage, ServerPlayer owner, String skillId) {
@@ -227,6 +235,68 @@ public final class QuirkSkills {
                 return milkFountain(level, pet, ownerUuid, target, rage, dur);
             case "piston_sheep_machine":
                 return pistonSheepMachine(level, pet, ownerUuid, target, rage, dur);
+
+            // ---- wave three (30 abstract / contraption skills) ----
+            case "anvil_guillotine":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "sheep_rainbow_cannon":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "tnt_hot_potato":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "fishing_crane":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "slime_pinball":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "villager_auction":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "end_rod_drill":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "chicken_gatling":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "boat_drift":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "creeper_fakeout":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "pufferfish_minefield":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "bed_bounce_castle":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "squid_ink_printer":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "golem_chiropractor":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "llama_spit_turret":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "panda_bowling":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "cat_keyboard_walker":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "minecart_rollercoaster":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "turtle_spinning_shell":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "fox_berry_trap":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "snowman_blender":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "pig_rocket_express":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "witch_cauldron_soup":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "skeleton_jazz_band":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "enderman_moving_company":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "polar_bear_slap":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "silverfish_tickle_pit":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "dolphin_surfboard":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "mooshroom_nuclear_stew":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
+            case "bat_ufo_abduction":
+                return contraption(level, pet, ownerUuid, target, rage, dur, id);
             default:
                 return false;
         }
@@ -2139,6 +2209,291 @@ public final class QuirkSkills {
                     return false;
                 }
                 return true;
+            }
+        });
+        return true;
+    }
+
+    // ================================================================== wave three
+
+    /** Decorative actors never run vanilla AI, attacks, explosions or block changes. */
+    private static Entity contraptionActor(ServerLevel level, UUID ownerUuid, EntityType<?> type,
+                                          Vec3 at, String id, int ttl) {
+        Entity actor = type.create(level);
+        if (actor == null) return null;
+        actor.moveTo(at.x, at.y, at.z, 0.0F, 0.0F);
+        actor.setNoGravity(true);
+        actor.noPhysics = true; // Decorative actors must not shove players or other pets.
+        actor.setInvulnerable(true);
+        actor.setSilent(true);
+        actor.addTag("supercow_quirk_actor");
+        if (actor instanceof Mob) {
+            ((Mob) actor).setNoAi(true);
+            ((Mob) actor).setPersistenceRequired();
+        }
+        if (actor instanceof net.minecraft.world.entity.decoration.ArmorStand) {
+            net.minecraft.world.entity.decoration.ArmorStand stand =
+                (net.minecraft.world.entity.decoration.ArmorStand) actor;
+            stand.setInvisible(true);
+            // Marker stands cannot be ridden, edited, collided with or looted.
+            net.minecraft.nbt.CompoundTag tag = new net.minecraft.nbt.CompoundTag();
+            stand.saveWithoutId(tag);
+            tag.putBoolean("Marker", true);
+            stand.load(tag);
+            net.minecraft.world.item.Item icon = Skills.byId(id).icon;
+            stand.setItemSlot(net.minecraft.world.entity.EquipmentSlot.HEAD,
+                new net.minecraft.world.item.ItemStack(icon));
+        }
+        if (actor instanceof Sheep) {
+            actor.setCustomName(new TextComponent("jeb_"));
+        }
+        if (!level.addFreshEntity(actor)) { actor.remove(); return null; }
+        SkillCleanup.track(actor, ownerUuid, ttl, id);
+        return actor;
+    }
+
+    /**
+     * Thirty bounded choreographies. Actors are visual only; every hit passes the same
+     * owner/friendly validator as the original skills. No real TNT, poison fish AI,
+     * vehicles, blocks or lightning are used, so decorative effects cannot grief.
+     */
+    private static boolean contraption(final ServerLevel level, final Cow pet, final UUID ownerUuid,
+                                       final LivingEntity target, final boolean rage, int dur, final String id) {
+        if (TASKS.size() >= 96) return false;
+        EntityType<?> type;
+        int count = 1;
+        switch (id) {
+            case "anvil_guillotine": case "fishing_crane": case "end_rod_drill":
+            case "bed_bounce_castle": case "boat_drift": case "minecart_rollercoaster":
+                type = EntityType.ARMOR_STAND; break;
+            case "sheep_rainbow_cannon": type = EntityType.SHEEP; break;
+            case "tnt_hot_potato": type = EntityType.COW; break;
+            case "slime_pinball": type = EntityType.SLIME; count = 3; break;
+            case "villager_auction": type = EntityType.VILLAGER; break;
+            case "chicken_gatling": type = EntityType.CHICKEN; break;
+            case "creeper_fakeout": type = EntityType.CREEPER; break;
+            case "pufferfish_minefield": type = EntityType.PUFFERFISH; count = 4; break;
+            case "squid_ink_printer": type = EntityType.SQUID; break;
+            case "golem_chiropractor": type = EntityType.IRON_GOLEM; break;
+            case "llama_spit_turret": type = EntityType.LLAMA; count = 2; break;
+            case "panda_bowling": type = EntityType.PANDA; break;
+            case "cat_keyboard_walker": type = EntityType.CAT; count = 2; break;
+            case "turtle_spinning_shell": type = EntityType.TURTLE; break;
+            case "fox_berry_trap": type = EntityType.FOX; break;
+            case "snowman_blender": type = EntityType.SNOW_GOLEM; count = 3; break;
+            case "pig_rocket_express": type = EntityType.PIG; break;
+            case "witch_cauldron_soup": type = EntityType.WITCH; break;
+            case "skeleton_jazz_band": type = EntityType.SKELETON; count = 3; break;
+            case "enderman_moving_company": type = EntityType.ENDERMAN; break;
+            case "polar_bear_slap": type = EntityType.POLAR_BEAR; break;
+            case "silverfish_tickle_pit": type = EntityType.SILVERFISH; count = 4; break;
+            case "dolphin_surfboard": type = EntityType.DOLPHIN; break;
+            case "mooshroom_nuclear_stew": type = EntityType.MOOSHROOM; break;
+            case "bat_ufo_abduction": type = EntityType.BAT; count = 4; break;
+            default: return false;
+        }
+        final int runTicks = Math.max(50, Math.min(80, dur));
+        final Vec3 base = target != null && target.isAlive() ? target.position()
+            : pet.position().add(lookDirection(pet).scale(4.0D));
+        Vec3 heading = horizontal(pet.position(), base).normalize();
+        final Vec3 dir = heading.lengthSqr() < 0.001D ? lookDirection(pet) : heading;
+        final List<UUID> actors = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            Entity e = contraptionActor(level, ownerUuid, type, base, id, runTicks + 10);
+            if (e != null) actors.add(e.getUUID());
+        }
+        if (actors.isEmpty()) return false;
+        pet.playSound(SoundEvents.PISTON_EXTEND, 0.55F, 1.2F);
+        TASKS.add(new Task(level, ownerUuid, runTicks) {
+            private Vec3 aim = base;
+            private int bounces;
+
+            @Override
+            boolean tick(long now) {
+                if (!pet.isAlive() || pet.level != level) return false;
+                int age = (int) (now - startTick);
+                if (age >= runTicks) return false;
+                // Sampling only each pulse bounds target searches and prevents following across worlds.
+                if ((id.equals("tnt_hot_potato") || id.equals("turtle_spinning_shell")) && age % 12 == 1) {
+                    List<LivingEntity> choices = nearby(level, base.x, base.y, base.z, 8.0D, ownerUuid, pet, target);
+                    if (!choices.isEmpty()) aim = choices.get((bounces++) % choices.size()).position();
+                }
+                for (int i = 0; i < actors.size(); i++) {
+                    Entity e = level.getEntity(actors.get(i));
+                    if (e == null || !e.isAlive()) continue;
+                    double phase = age * 0.25D + i * Math.PI * 2.0D / actors.size();
+                    double x = base.x, y = base.y, z = base.z;
+                    switch (id) {
+                        case "anvil_guillotine": y += 4.0D * (1.0D - (age % 16) / 15.0D); break;
+                        case "sheep_rainbow_cannon": x -= dir.x * 2; z -= dir.z * 2; y += 0.3D; break;
+                        case "tnt_hot_potato": case "turtle_spinning_shell":
+                            x = aim.x; z = aim.z; y = aim.y + 0.7D + Math.abs(Math.sin(age * 0.3D)); break;
+                        case "fishing_crane": y += 5.0D; break;
+                        case "slime_pinball": case "pufferfish_minefield":
+                            x += Math.cos(i * Math.PI * 2 / actors.size()) * 2.5D;
+                            z += Math.sin(i * Math.PI * 2 / actors.size()) * 2.5D;
+                            y += Math.abs(Math.sin(phase)) * 0.3D; break;
+                        case "villager_auction": x += 2.0D; y += Math.abs(Math.sin(phase)) * 0.2D; break;
+                        case "end_rod_drill":
+                            x += dir.x * (age % 16 * 0.22D - 2.0D);
+                            z += dir.z * (age % 16 * 0.22D - 2.0D); y += 0.6D; break;
+                        case "chicken_gatling": x = pet.getX(); z = pet.getZ(); y = pet.getY() + 2.4D; break;
+                        case "boat_drift": case "minecart_rollercoaster":
+                            x += Math.cos(phase) * 3; z += Math.sin(phase) * 3;
+                            y += id.equals("boat_drift") ? 0 : 1.0D + Math.sin(age * 0.4D); break;
+                        case "creeper_fakeout": x -= dir.x; z -= dir.z; y += Math.sin(age * 0.5D) * 0.1D; break;
+                        case "bed_bounce_castle": y -= 1.2D; break;
+                        case "squid_ink_printer": y += 3.0D; break;
+                        case "golem_chiropractor": x -= dir.x * 1.5D; z -= dir.z * 1.5D; break;
+                        case "llama_spit_turret": x += -dir.z * (i == 0 ? 2 : -2); z += dir.x * (i == 0 ? 2 : -2); break;
+                        case "panda_bowling": case "pig_rocket_express": case "dolphin_surfboard":
+                            double travel = age / (double) runTicks * 10 - 5;
+                            x += dir.x * travel; z += dir.z * travel;
+                            y += id.equals("pig_rocket_express") ? age * 0.04D : Math.abs(Math.sin(phase)) * 0.5D; break;
+                        case "cat_keyboard_walker":
+                            x += Math.sin(phase * 1.7D) * 2.5D; z += Math.cos(phase * 1.3D) * 2.5D; break;
+                        case "fox_berry_trap": y += Math.abs(Math.sin(age * 0.18D)) * 1.5D; break;
+                        case "snowman_blender": case "silverfish_tickle_pit": case "bat_ufo_abduction":
+                            double r = id.equals("silverfish_tickle_pit") ? 0.7D : 2.0D;
+                            x += Math.cos(phase) * r; z += Math.sin(phase) * r;
+                            if (id.equals("bat_ufo_abduction")) y += 5.0D; break;
+                        case "witch_cauldron_soup": x += 2.0D; break;
+                        case "skeleton_jazz_band": x += (i - 1) * 1.8D; z += 2.0D; y += Math.abs(Math.sin(phase)) * 0.25D; break;
+                        case "enderman_moving_company": x += (age / 16 % 2 == 0 ? -2 : 2); break;
+                        case "polar_bear_slap": x -= dir.x * 2; z -= dir.z * 2; break;
+                        case "mooshroom_nuclear_stew": y += age * 0.006D; break;
+                        default: break;
+                    }
+                    e.moveTo(x, y, z, (float) (age * 18 + i * 90), 0.0F);
+                    e.setDeltaMovement(Vec3.ZERO);
+                }
+                // Different pulse timings keep rapid-fire, three-hit and charged skills distinct.
+                int interval = 16;
+                boolean pulse;
+                switch (id) {
+                    case "chicken_gatling": interval = 4; break;
+                    case "llama_spit_turret": case "silverfish_tickle_pit": interval = 8; break;
+                    case "slime_pinball": case "turtle_spinning_shell": case "pufferfish_minefield": interval = 12; break;
+                    case "golem_chiropractor": case "anvil_guillotine": interval = 16; break;
+                    case "bat_ufo_abduction": case "snowman_blender": interval = 6; break;
+                    default: break;
+                }
+                pulse = age > 0 && age % interval == 0;
+                if (id.equals("anvil_guillotine") || id.equals("golem_chiropractor") || id.equals("enderman_moving_company"))
+                    pulse = age == 16 || age == 32 || age == 48;
+                if (id.equals("creeper_fakeout") || id.equals("mooshroom_nuclear_stew") || id.equals("polar_bear_slap"))
+                    pulse = age == 40;
+                if (age % 4 == 0) {
+                    if (id.equals("bat_ufo_abduction") || id.equals("fishing_crane")) {
+                        for (int h = 0; h <= 5; h++)
+                            level.sendParticles(ParticleTypes.END_ROD, base.x, base.y + h, base.z, 1, 0.12D, 0.05D, 0.12D, 0);
+                    } else if (id.equals("creeper_fakeout") || id.equals("tnt_hot_potato") || id.equals("mooshroom_nuclear_stew")) {
+                        level.sendParticles(ParticleTypes.SMOKE, aim.x, aim.y + 1.2D, aim.z, 4, 0.3D, 0.3D, 0.3D, 0.01D);
+                    }
+                }
+                if (!pulse) return true;
+                Vec3 hit = id.equals("tnt_hot_potato") || id.equals("turtle_spinning_shell") ? aim : base;
+                double radius = id.equals("mooshroom_nuclear_stew") ? 6.0D : 4.0D;
+                net.minecraft.core.particles.SimpleParticleType particle = ParticleTypes.CRIT;
+                switch (id) {
+                    case "sheep_rainbow_cannon": case "cat_keyboard_walker": case "skeleton_jazz_band": particle = ParticleTypes.NOTE; break;
+                    case "squid_ink_printer": particle = ParticleTypes.SQUID_INK; break;
+                    case "dolphin_surfboard": case "llama_spit_turret": particle = ParticleTypes.SPLASH; break;
+                    case "witch_cauldron_soup": particle = ParticleTypes.WITCH; break;
+                    case "villager_auction": case "fox_berry_trap": particle = ParticleTypes.HAPPY_VILLAGER; break;
+                    case "snowman_blender": particle = ParticleTypes.ITEM_SNOWBALL; break;
+                    case "creeper_fakeout": particle = ParticleTypes.HEART; break;
+                    case "enderman_moving_company": particle = ParticleTypes.PORTAL; break;
+                    default: break;
+                }
+                level.sendParticles(particle, hit.x, hit.y + 1.0D, hit.z, 14, 1.5D, 0.8D, 1.5D, 0.04D);
+                if (id.equals("sheep_rainbow_cannon") || id.equals("chicken_gatling") || id.equals("llama_spit_turret")) {
+                    Vec3 origin = id.equals("chicken_gatling") ? pet.position().add(0, 2, 0) : base.add(dir.scale(-3));
+                    for (int j = 0; j < 8; j++) {
+                        Vec3 point = origin.add(hit.subtract(origin).scale(j / 7.0D));
+                        level.sendParticles(particle, point.x, point.y + 0.7D, point.z, 1, 0, 0, 0, 0);
+                    }
+                }
+                if (id.equals("skeleton_jazz_band") || id.equals("cat_keyboard_walker"))
+                    pet.playSound(SoundEvents.NOTE_BLOCK_PLING, 0.5F, 0.6F + level.random.nextFloat());
+                if (id.equals("anvil_guillotine")) pet.playSound(SoundEvents.ANVIL_LAND, 0.5F, 1.0F);
+                if (id.equals("creeper_fakeout") || id.equals("mooshroom_nuclear_stew")) {
+                    ring(level, hit.x, hit.y + 0.2D, hit.z, radius);
+                    level.sendParticles(ParticleTypes.EXPLOSION, hit.x, hit.y + 1, hit.z, 3, 0.4D, 0.4D, 0.4D, 0);
+                }
+                for (LivingEntity victim : nearby(level, hit.x, hit.y, hit.z, radius, ownerUuid, pet, target)) {
+                    if (victim instanceof Player) continue; // Even an explicit target cannot enable PvP here.
+                    Vec3 push = horizontal(hit, victim.position()).normalize();
+                    if (push.lengthSqr() < 0.001D) push = dir;
+                    double lift = 0.25D, shove = 0.35D;
+                    float amount = rage ? 1.5F : 0.8F;
+                    switch (id) {
+                        case "anvil_guillotine": lift = 0.12D; amount = rage ? 4 : 2; break;
+                        case "sheep_rainbow_cannon": shove = 1.0D; lift = 0.5D; break;
+                        case "tnt_hot_potato": lift = 0.65D; shove = 0.65D; break;
+                        case "fishing_crane":
+                            lift = age < 32 ? 0.5D : -0.7D; shove = 0; break;
+                        case "slime_pinball":
+                            push = new Vec3(Math.cos(age), 0, Math.sin(age)); shove = 1.15D; lift = 0.3D; break;
+                        case "villager_auction":
+                            victim.addEffect(new MobEffectInstance(MobEffects.CONFUSION, 60, 0)); shove = 0.1D; break;
+                        case "end_rod_drill": push = dir; shove = 0.8D; lift = 0.8D; break;
+                        case "chicken_gatling": amount = rage ? 0.5F : 0.3F; lift = 0.08D; shove = 0.12D; break;
+                        case "boat_drift": shove = 0.9D; break;
+                        case "creeper_fakeout": lift = 0.9D; shove = 1; break;
+                        case "pufferfish_minefield":
+                            victim.addEffect(new MobEffectInstance(MobEffects.POISON, 40, 0)); lift = 0.45D; break;
+                        case "bed_bounce_castle": lift = rage ? 1.25D : 0.95D; shove = 0; break;
+                        case "squid_ink_printer":
+                            victim.addEffect(new MobEffectInstance(MobEffects.BLINDNESS, 60, 0));
+                            victim.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 40, 1)); shove = 0; break;
+                        case "golem_chiropractor": lift = 1.0D; shove = 0.1D; amount = rage ? 3 : 2; break;
+                        case "llama_spit_turret": push = dir; shove = 0.65D; break;
+                        case "panda_bowling": push = dir; shove = 1.0D; lift = 0.6D; break;
+                        case "cat_keyboard_walker":
+                            switch (level.random.nextInt(4)) {
+                                case 0: lift = 0.9D; break;
+                                case 1: victim.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 40, 2)); break;
+                                case 2: push = push.scale(-1); shove = 0.7D; break;
+                                default: level.sendParticles(ParticleTypes.FIREWORK, victim.getX(), victim.getY() + 1, victim.getZ(), 8, 0.3D, 0.5D, 0.3D, 0.05D);
+                            } break;
+                        case "minecart_rollercoaster": lift = 0.7D; shove = 0.8D; break;
+                        case "turtle_spinning_shell": shove = 1.1D; lift = 0.2D; break;
+                        case "fox_berry_trap":
+                            victim.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 35, 3)); shove = 0; lift = 0; break;
+                        case "snowman_blender":
+                            push = new Vec3(-push.z, 0, push.x); lift = 0.45D; shove = 0.6D;
+                            victim.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 30, 0)); break;
+                        case "pig_rocket_express": push = dir; lift = 0.85D; shove = 0.65D; break;
+                        case "witch_cauldron_soup":
+                            victim.addEffect(new MobEffectInstance(MobEffects.CONFUSION, 60, 0));
+                            victim.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 60, 0)); lift = 0.3D; break;
+                        case "skeleton_jazz_band": lift = 0.45D; shove = 0.6D; break;
+                        case "enderman_moving_company":
+                            // Velocity rather than unsafe teleporting into blocks/unloaded chunks.
+                            push = new Vec3(age == 32 ? -dir.x : dir.x, 0, age == 32 ? -dir.z : dir.z);
+                            shove = 0.9D; lift = 0.6D; break;
+                        case "polar_bear_slap": shove = rage ? 1.8D : 1.4D; lift = 0.65D; amount = rage ? 5 : 3; break;
+                        case "silverfish_tickle_pit": amount = 0.4F; shove = 0; lift = 0.35D; break;
+                        case "dolphin_surfboard": push = dir; lift = 0.75D; shove = 0.75D; break;
+                        case "mooshroom_nuclear_stew": lift = 1.1D; shove = 1.1D; amount = rage ? 5 : 3; break;
+                        case "bat_ufo_abduction":
+                            push = horizontal(victim.position(), base).normalize(); lift = 0.28D; shove = 0.15D; amount = 0.4F; break;
+                        default: break;
+                    }
+                    damage(victim, amount, pet, ownerUuid);
+                    victim.setDeltaMovement(push.x * shove, lift, push.z * shove);
+                    victim.hurtMarked = true;
+                }
+                return true;
+            }
+
+            @Override
+            void onFinish() {
+                for (UUID uuid : actors) {
+                    Entity e = level.getEntity(uuid);
+                    if (e != null) e.remove();
+                }
             }
         });
         return true;

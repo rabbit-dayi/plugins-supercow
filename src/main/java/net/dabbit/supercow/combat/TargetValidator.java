@@ -31,7 +31,8 @@ public final class TargetValidator {
             return false;
         }
         Set<String> tags = entity.getTags();
-        return tags.contains("supercow_pet")
+        return tags.contains("supercow_quirk_actor")
+            || tags.contains("supercow_pet")
             || tags.contains("supercow_summon")
             || tags.contains("supercow_bomber_chicken")
             || tags.contains("supercow_exploding_cow");
