@@ -11,6 +11,7 @@ import java.io.FileReader;
 import java.io.FileWriter;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -380,6 +381,20 @@ public class SuperCowMod implements ModInitializer {
         summonManager.setSummonMode(ownerUuid, SummonMode.fromString(data.summonMode));
     }
 
+    /** Re-binds an already-loaded pet entity into both ownership maps and refreshes its stats/modes. */
+    public void bindPetEntity(UUID ownerUuid, Cow cow) {
+        if (ownerUuid == null || cow == null) {
+            return;
+        }
+        PetData data = petDataByOwner.get(ownerUuid);
+        if (data != null) {
+            turnIntoPet(cow, ownerUuid, data);
+        } else {
+            activePetByOwner.put(ownerUuid, cow);
+            ownerByPetEntity.put(cow.getUUID(), ownerUuid);
+        }
+    }
+
     public Cow spawnPetFor(ServerPlayer player, PetData data) {
         if (!(player.level instanceof ServerLevel)) {
             return null;
@@ -419,18 +434,71 @@ public class SuperCowMod implements ModInitializer {
             {2.5D, 0.0D}, {0.0D, -2.5D}, {1.5D, 1.5D}, {-1.5D, -1.5D}, {0.0D, 0.0D}
         };
         double[] lifts = {0.0D, 1.0D, -0.5D, 0.5D};
-        for (double[] offset : offsets) {
-            for (double lift : lifts) {
-                double px = x + offset[0];
-                double py = y + lift;
-                double pz = z + offset[1];
-                entity.moveTo(px, py, pz, yRot, 0.0F);
-                if (level.noCollision(entity, entity.getBoundingBox())) {
-                    return true;
+        // Second pass over the same spots, snapped onto the terrain: a pet is a no-AI mob with a
+        // hand-rolled gravity that only accelerates by 0.08/tick, so anything spawned even a few
+        // blocks up (a raised platform, the roof of a build, a floating island) fell for ten
+        // seconds and died of fall damage before it ever reached the player's feet.
+        for (int pass = 0; pass < 2; pass++) {
+            for (double[] offset : offsets) {
+                for (double lift : lifts) {
+                    double baseX = x + offset[0];
+                    double baseZ = z + offset[1];
+                    double baseY = y + lift;
+                    double px = baseX;
+                    double py = baseY;
+                    double pz = baseZ;
+                    if (pass == 1) {
+                        py = groundBelow(level, baseX, baseY, baseZ);
+                        if (Double.isNaN(py)) {
+                            continue;
+                        }
+                        py += 0.01D;
+                    }
+                    entity.moveTo(px, py, pz, yRot, 0.0F);
+                    if (level.noCollision(entity, entity.getBoundingBox())
+                        && (pass == 1 || !isAirPocket(level, entity))) {
+                        return true;
+                    }
                 }
             }
         }
         return false;
+    }
+
+    /** True when the entity has no solid block beneath it (it would just fall). */
+    private static boolean isAirPocket(ServerLevel level, Entity entity) {
+        net.minecraft.core.BlockPos below = new net.minecraft.core.BlockPos(
+            Math.floor(entity.getX()), Math.floor(entity.getY() - 0.6D), Math.floor(entity.getZ()));
+        return level.getBlockState(below).getMaterial().isReplaceable();
+    }
+
+    /**
+     * Highest solid floor at or below {@code fromY} (searching down at most 48 blocks) whose two
+     * blocks above are free, returned as the y the entity's feet should sit at.
+     *
+     * @return the feet y, or NaN when no floor was found
+     */
+    public static double groundBelow(ServerLevel level, double x, double fromY, double z) {
+        net.minecraft.core.BlockPos.MutableBlockPos pos = new net.minecraft.core.BlockPos.MutableBlockPos();
+        int ix = (int) Math.floor(x);
+        int iz = (int) Math.floor(z);
+        for (int dy = 0; dy <= 48; dy++) {
+            int iy = (int) Math.floor(fromY) - dy;
+            pos.set(ix, iy, iz);
+            boolean solid = !level.getBlockState(pos).getMaterial().isReplaceable()
+                && !level.getBlockState(pos).getCollisionShape(level, pos).isEmpty();
+            if (!solid) {
+                continue;
+            }
+            pos.set(ix, iy + 1, iz);
+            boolean free1 = level.getBlockState(pos).getCollisionShape(level, pos).isEmpty();
+            pos.set(ix, iy + 2, iz);
+            boolean free2 = level.getBlockState(pos).getCollisionShape(level, pos).isEmpty();
+            if (free1 && free2) {
+                return iy + 1.0D;
+            }
+        }
+        return Double.NaN;
     }
 
     private void showPetInfo(ServerPlayer sp, Cow cow, UUID ownerUuid) {
@@ -607,7 +675,14 @@ public class SuperCowMod implements ModInitializer {
     /** FIXED BUG: recallPet never cleaned combat state in the Bukkit version. */
     public void recallPet(ServerPlayer owner) {
         UUID ownerUuid = owner.getUUID();
+        PetData data = petDataByOwner.get(ownerUuid);
         Cow pet = getActivePet(ownerUuid);
+        if (pet == null && data != null && !data.isAlive && data.deathTimestampMs > 0L) {
+            long elapsedSec = Math.max(0L, (System.currentTimeMillis() - data.deathTimestampMs) / 1000L);
+            long remainSec = Math.max(1L, config.naturalReviveSeconds - elapsedSec);
+            owner.sendMessage(new TextComponent("\u00A7e[\u8D85\u7EA7\u725B] \u4F60\u7684\u725B\u6B63\u5728\u7B49\u5F85\u590D\u6D3B\uFF08\u5269\u4F59 " + remainSec + " \u79D2\uFF09\u3002"), ownerUuid);
+            return;
+        }
         if (pet != null) {
             combatManager.onPetRemovedOrDied(ownerUuid, pet);
             ownerByPetEntity.remove(pet.getUUID());
@@ -617,6 +692,10 @@ public class SuperCowMod implements ModInitializer {
             pet.remove();
         }
         activePetByOwner.remove(ownerUuid);
+        if (data != null) {
+            data.isAlive = false;
+            data.deathTimestampMs = 0L;
+        }
         owner.sendMessage(new TextComponent("\u00A7a[\u8D85\u7EA7\u725B] \u5DF2\u56DE\u6536\u4F60\u7684\u725B\u3002\u4F7F\u7528 /supercow call \u53EC\u5524\u3002"), ownerUuid);
     }
 
@@ -643,10 +722,13 @@ public class SuperCowMod implements ModInitializer {
         if (dyingCorpses.isEmpty()) {
             return;
         }
-        for (UUID id : new ArrayList<>(dyingCorpses.keySet())) {
-            LivingEntity corpse = dyingCorpses.get(id);
+        Iterator<Map.Entry<UUID, LivingEntity>> it = dyingCorpses.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<UUID, LivingEntity> entry = it.next();
+            UUID id = entry.getKey();
+            LivingEntity corpse = entry.getValue();
             if (corpse == null || corpse.removed || corpse.getHealth() > 0.0F) {
-                dyingCorpses.remove(id);
+                it.remove();
                 corpseDeathTimeSnapshot.remove(id);
                 corpseStuckTicks.remove(id);
                 continue;
@@ -664,11 +746,35 @@ public class SuperCowMod implements ModInitializer {
                 if (corpse.deathTime < 20) {
                     corpse.remove();
                 }
-                dyingCorpses.remove(id);
+                it.remove();
                 corpseDeathTimeSnapshot.remove(id);
                 corpseStuckTicks.remove(id);
             }
         }
+    }
+
+    /** The owner's pet cow if it is currently loaded in a level (used to re-bind a lost link). */
+    private Cow findLoadedPet(UUID ownerUuid) {
+        MinecraftServer srv = server;
+        if (srv == null) {
+            return null;
+        }
+        String ownerTag = "supercow_owner:" + ownerUuid;
+        for (ServerLevel level : srv.getAllLevels()) {
+            for (Entity entity : level.getAllEntities()) {
+                if (!(entity instanceof Cow)) {
+                    continue;
+                }
+                if (!entity.getTags().contains(TAG_PET) || !entity.getTags().contains(ownerTag)) {
+                    continue;
+                }
+                if (!entity.isAlive() || entity.removed) {
+                    continue;
+                }
+                return (Cow) entity;
+            }
+        }
+        return null;
     }
 
     private static boolean isPetInWorld(Cow pet) {
@@ -681,10 +787,21 @@ public class SuperCowMod implements ModInitializer {
     private void onEndTick(MinecraftServer srv) {
         server = srv;
         serverTicks++;
+        if (petDataByOwner.isEmpty()) {
+            // Player without a cow: only the global managers need a tick, skip all the per-pet work.
+            tickGlobalManagers();
+            return;
+        }
 
-        for (UUID ownerUuid : new ArrayList<>(petDataByOwner.keySet())) {
-            PetData data = petDataByOwner.get(ownerUuid);
+        // Iterator instead of a defensive key-set copy: this ran every tick and allocated a new
+        // ArrayList (plus boxing of every UUID) for every server, pet or no pet.
+        Iterator<Map.Entry<UUID, PetData>> it = petDataByOwner.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<UUID, PetData> entry = it.next();
+            UUID ownerUuid = entry.getKey();
+            PetData data = entry.getValue();
             if (data == null) {
+                it.remove();
                 continue;
             }
             if (!data.isAlive) {
@@ -705,10 +822,20 @@ public class SuperCowMod implements ModInitializer {
             }
 
             Cow pet = getActivePet(ownerUuid);
-            ServerPlayer owner = getPlayer(ownerUuid);
+            if ((pet == null || !pet.isAlive()) && data.isAlive) {
+                // The in-memory link survived a world unload/reload: the cow is still in the map but
+                // the entity is gone, so the tick below never sees a pet and never rebuilds it.
+                // Try to re-bind an already loaded pet first, otherwise spawn a fresh one.
+                Cow rebind = findLoadedPet(ownerUuid);
+                if (rebind != null) {
+                    bindPetEntity(ownerUuid, rebind);
+                    pet = rebind;
+                }
+            }
             if (pet != null && !isPetInWorld(pet)) {
                 // A spawn that raced a chunk load used to leave a detached cow in the map: it kept
                 // shooting, but mobs could not see or hurt it and @e could not select it.
+                // Only the entity link is dropped, the PetData stays so the pet is respawned below.
                 combatManager.onPetRemovedOrDied(ownerUuid, pet);
                 ownerByPetEntity.remove(pet.getUUID());
                 activePetByOwner.remove(ownerUuid);
@@ -721,38 +848,40 @@ public class SuperCowMod implements ModInitializer {
                     && pet.getHealth() < pet.getMaxHealth()) {
                     pet.setHealth(Math.min(pet.getMaxHealth(), pet.getHealth() + (float) config.regenAmount));
                 }
+                // A no-AI pet does not fall by itself: when it is airborne with no active route the
+                // legacy mover's gravity has to be applied here, otherwise it hovers where it was
+                // left. Done in the same pass as the combat tick (it used to walk the map twice and
+                // recurse into getActivePet per pet).
+                if (!pet.isOnGround()
+                    && !pathfindingManager.hasActivePath(pet.getUUID())
+                    && !pathfindingManager.isSpiraling(pet.getUUID())) {
+                    pathfindingManager.applyIdleGravity(pet);
+                }
                 if (serverTicks % 2 == 0) {
-                    combatManager.tickPetCombat(ownerUuid, pet, owner, data);
+                    // Owner lookup happens here (once per pet per combat tick) instead of on every
+                    // server tick: the passive follow no longer pays for it 20x a second.
+                    ServerPlayer owner = getPlayer(ownerUuid);
+                    if (owner != null) {
+                        combatManager.tickPetCombat(ownerUuid, pet, owner, data);
+                    }
                 }
                 // 牛自己的哞哞声默认关掉：跟着跑的时候一声接一声太吵（配置可开回来）。
-                if (pet.isSilent() != !config.petAmbientSoundEnabled) {
-                    pet.setSilent(!config.petAmbientSoundEnabled);
+                // Only written when the flag actually disagrees: setSilent() marks the entity dirty,
+                // and doing that every tick made the client resync the cow constantly.
+                boolean wantSilent = !config.petAmbientSoundEnabled;
+                if (pet.isSilent() != wantSilent) {
+                    pet.setSilent(wantSilent);
                 }
-            } else if (owner != null && getActivePet(ownerUuid) == null && petDataByOwner.get(ownerUuid) != null
-                && petDataByOwner.get(ownerUuid).isAlive) {
+            } else if (getActivePet(ownerUuid) == null && data.isAlive) {
                 // Pet chunk unloaded / entity lost: re-spawn next to the owner.
-                spawnPetFor(owner, petDataByOwner.get(ownerUuid));
+                ServerPlayer owner = getPlayer(ownerUuid);
+                if (owner != null) {
+                    spawnPetFor(owner, data);
+                }
             }
         }
 
-        tickCorpseCleanup();
-        combatManager.tick();
-        summonManager.tick();
-        MinionManager.tickAll();
-        QuirkSkills.tickAll();
-        SpecialAttackManagers.tickAll();
-        SkillCleanup.tick();
-        pathfindingManager.tick();
-        // A no-AI pet does not fall by itself: when it is airborne with no active route the
-        // legacy mover's gravity has to be applied here, otherwise it hovers where it was left.
-        for (UUID ownerUuid : new ArrayList<>(activePetByOwner.keySet())) {
-            Cow flying = getActivePet(ownerUuid);
-            if (flying != null && flying.isAlive() && !flying.isOnGround()
-                && !pathfindingManager.hasActivePath(flying.getUUID())
-                && !pathfindingManager.isSpiraling(flying.getUUID())) {
-                pathfindingManager.applyIdleGravity(flying);
-            }
-        }
+        tickGlobalManagers();
         if (serverTicks % 40 == 0) {
             // Safety net: anything left behind with the supercow_skill tag that the registry no
             // longer knows about is removed, so a skill can never leak an entity permanently.
@@ -784,6 +913,24 @@ public class SuperCowMod implements ModInitializer {
         if (serverTicks % 1200 == 0) {
             savePets();
         }
+    }
+
+    /**
+     * The per-tick managers that do not depend on this mod's pet loop. Split out so the empty
+     * pet map path can still tick them without running the (much more expensive) per-pet pass.
+     */
+    private void tickGlobalManagers() {
+        tickCorpseCleanup();
+        combatManager.tick();
+        summonManager.tick();
+        MinionManager.tickAll();
+        QuirkSkills.tickAll();
+        SpecialAttackManagers.tickAll();
+        SkillCleanup.tick();
+        // Re-arm the passive follow before the mover runs, so a pet whose path was dropped last
+        // tick starts walking in this one instead of standing still until the player teleports.
+        combatManager.maintainPassiveFollow();
+        pathfindingManager.tick();
     }
 
     // ---------------------------------------------------------------- persistence
@@ -952,6 +1099,7 @@ public class SuperCowMod implements ModInitializer {
                 .then(Commands.literal("summon").executes(ctx -> summon(ctx.getSource())))
                 .then(Commands.literal("call").executes(ctx -> summon(ctx.getSource())))
                 .then(Commands.literal("dismiss").executes(ctx -> dismiss(ctx.getSource())))
+                .then(Commands.literal("recall").executes(ctx -> dismiss(ctx.getSource())))
                 .then(Commands.literal("heal").executes(ctx -> heal(ctx.getSource())))
                 .then(Commands.literal("reload").requires(src -> src.hasPermission(2)).executes(ctx -> reload(ctx.getSource())))
                 .then(Commands.literal("mode")
@@ -985,30 +1133,64 @@ public class SuperCowMod implements ModInitializer {
                     .then(Commands.argument("distance", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(2.0D, 24.0D))
                         .executes(ctx -> setFollow(ctx.getSource(),
                             com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(ctx, "distance")))))
-                .then(Commands.literal("skills").executes(ctx -> skills(ctx.getSource())))
-                .then(Commands.literal("gui").executes(ctx -> openGui(ctx.getSource())))
-                .then(Commands.literal("skill").requires(src -> src.hasPermission(2))
-                    .then(Commands.literal("arrow").executes(ctx -> forceSkill(ctx.getSource(), "arrow")))
-                    .then(Commands.literal("fireball").executes(ctx -> forceSkill(ctx.getSource(), "fireball")))
-                    .then(Commands.literal("potion").executes(ctx -> forceSkill(ctx.getSource(), "potion")))
-                    .then(Commands.literal("firework").executes(ctx -> forceSkill(ctx.getSource(), "firework")))
-                    .then(Commands.literal("chicken").executes(ctx -> forceSkill(ctx.getSource(), "chicken")))
-                    .then(Commands.literal("music").executes(ctx -> forceSkill(ctx.getSource(), "music")))
-                    .then(Commands.literal("exploding_cow").executes(ctx -> forceSkill(ctx.getSource(), "exploding_cow")))
-                    .then(Commands.literal("summon").executes(ctx -> forceSkill(ctx.getSource(), "summon")))
-                    .then(Commands.literal("summon_parrots").executes(ctx -> forceSkill(ctx.getSource(), "summon_parrots")))
-                    .then(Commands.literal("summon_rabbits").executes(ctx -> forceSkill(ctx.getSource(), "summon_rabbits")))
-                    .then(Commands.literal("sky_spiral").executes(ctx -> forceSkill(ctx.getSource(), "sky_spiral")))
-                    .then(Commands.literal("cow_rain").executes(ctx -> forceSkill(ctx.getSource(), "cow_rain")))
-                    .then(Commands.literal("milk_bomb").executes(ctx -> forceSkill(ctx.getSource(), "milk_bomb")))
-                    .then(Commands.literal("moon_walk").executes(ctx -> forceSkill(ctx.getSource(), "moon_walk")))
-                    .then(Commands.literal("moo_wave").executes(ctx -> forceSkill(ctx.getSource(), "moo_wave")))
-                    .then(Commands.literal("hay_tornado").executes(ctx -> forceSkill(ctx.getSource(), "hay_tornado")))
-                    .then(Commands.literal("butterfly_swarm").executes(ctx -> forceSkill(ctx.getSource(), "butterfly_swarm")))
-                    .then(Commands.literal("zero_gravity").executes(ctx -> forceSkill(ctx.getSource(), "zero_gravity")))
-                    .then(Commands.literal("mirror_cow").executes(ctx -> forceSkill(ctx.getSource(), "mirror_cow")))
-                    .then(Commands.literal("teleport_swap").executes(ctx -> forceSkill(ctx.getSource(), "teleport_swap")))
-                    .then(Commands.literal("confetti").executes(ctx -> forceSkill(ctx.getSource(), "confetti")))));
+                .then(Commands.literal("skills")
+                    .executes(ctx -> skills(ctx.getSource()))
+                    .then(Commands.argument("page", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 16))
+                        .executes(ctx -> skillsPage(ctx.getSource(),
+                            com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(ctx, "page")))))
+                .then(Commands.literal("gui")
+                    .executes(ctx -> openGui(ctx.getSource(), 1))
+                    .then(Commands.argument("page", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 16))
+                        .executes(ctx -> openGui(ctx.getSource(),
+                            com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(ctx, "page")))))
+                // One literal per registered skill id, generated from the roster so a new skill
+                // can never be missing from the command tree (the old hand-written list was).
+                .then(skillNode().requires(src -> src.hasPermission(2))));
+        }
+
+        /**
+         * Builds {@code /supercow skill <id>} from the live roster.
+         *
+         * <p>Brigadier literals cannot contain spaces, so a skill is addressable by its id, by its
+         * display name when that has no space, and by the id without underscores (keeps the old
+         * {@code explodingcow} spelling working). Adding a skill to {@link Skills} is therefore
+         * enough to make it reachable from the command line.</p>
+         */
+        private static com.mojang.brigadier.builder.LiteralArgumentBuilder<CommandSourceStack> skillNode() {
+            com.mojang.brigadier.builder.LiteralArgumentBuilder<CommandSourceStack> node =
+                Commands.literal("skill").executes(ctx -> skills(ctx.getSource()));
+            attachSkillLiterals(node);
+            return node;
+        }
+
+        private static void addSkillLiteral(
+            com.mojang.brigadier.builder.LiteralArgumentBuilder<CommandSourceStack> root,
+            java.util.Set<String> seen, String literal, final String skillId) {
+            if (!seen.add(literal)) {
+                return;
+            }
+            root.then(Commands.literal(literal).executes(ctx -> forceSkill(ctx.getSource(), skillId)));
+        }
+
+        /**
+         * Registers every skill id as a direct child of {@code parent}. Kept separate from
+         * {@link #buildSkillArgument()} because Brigadier has no public API to re-parent an
+         * already-built literal node.
+         */
+        private static void attachSkillLiterals(
+            com.mojang.brigadier.builder.LiteralArgumentBuilder<CommandSourceStack> parent) {
+            java.util.Set<String> seen = new java.util.LinkedHashSet<>();
+            for (Skills.Skill skill : Skills.all()) {
+                final String id = skill.id.toLowerCase();
+                addSkillLiteral(parent, seen, id, id);
+                if (skill.display != null && skill.display.indexOf(' ') < 0 && !skill.display.equals(id)) {
+                    addSkillLiteral(parent, seen, skill.display, id);
+                }
+                if (id.indexOf('_') >= 0) {
+                    addSkillLiteral(parent, seen, id.replace("_", ""), id);
+                }
+            }
+        }
         }
 
         private static ServerPlayer player(CommandSourceStack src) {
@@ -1028,10 +1210,10 @@ public class SuperCowMod implements ModInitializer {
             src.sendSuccess(new TextComponent("\u00A7e/supercow mode <protecting|aggressive|defensive|passive>"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow summonmode <follow|aggressive|defensive|guard>"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow attack <arrow|fireball|potion|firework|chicken|music|exploding_cow|summon>"), false);
-            src.sendSuccess(new TextComponent("\u00A7e/supercow skills \u00A77- \u5217\u51FA\u6280\u80FD\u8868\u4E0E\u6D3B\u52A8\u6280\u80FD\u5B9E\u4F53\u6570"), false);
-            src.sendSuccess(new TextComponent("\u00A7e/supercow follow <2-24> \u00A77- \u8C03\u8DDF\u968F\u8DDD\u79BB\uFF08\u9ED8\u8BA4 10 \u683C\uFF09"), false);
-            src.sendSuccess(new TextComponent("\u00A7e/supercow gui \u00A77- \u6253\u5F00\u5BA0\u7269\u9762\u677F\uFF08\u4E5F\u53EF\u7A7A\u624B\u53F3\u952E\u5BA0\u7269\u725B\uFF09"), false);
-            src.sendSuccess(new TextComponent("\u00A7e/supercow skill <name> \u00A77- \u5F3A\u5236\u91CA\u653E\u4E00\u4E2A\u6280\u80FD (\u9700\u6743\u96502)"), false);
+            src.sendSuccess(new TextComponent("\u00A7e/supercow skills [\u7B2C\u51E0\u9875] \u00A77- \u5217\u51FA\u5168\u90E8\u6280\u80FD\uFF08\u6BCF\u9875 10 \u6761\uFF09\u4E0E\u6D3B\u52A8\u5B9E\u4F53\u6570"), false);
+            src.sendSuccess(new TextComponent("\u00A7e/supercow follow <2-24> \u00A77- \u8C03\u8DDF\u968F\u8DDD\u79BB\uFF08\u9ED8\u8BA4 20 \u683C\uFF0C\u8D8A\u5927\u8D8A\u8FDC\uFF09"), false);
+            src.sendSuccess(new TextComponent("\u00A7e/supercow gui [\u7B2C\u51E0\u9875] \u00A77- \u6253\u5F00\u5BA0\u7269\u9762\u677F\uFF08\u4E5F\u53EF\u7A7A\u624B\u53F3\u952E\u5BA0\u7269\u725B\uFF1B\u9762\u677F\u5185\u7B2C 41/42 \u683C\u7FFB\u9875\uFF09"), false);
+            src.sendSuccess(new TextComponent("\u00A7e/supercow skill [\u6280\u80FDid] \u00A77- \u5F3A\u5236\u91CA\u653E\uFF08\u4E0D\u586B\u5219\u5217\u51FA\u5168\u90E8 id\uFF0C\u9700\u6743\u96502\uFF09"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow heal \u00A77- \u6CBB\u7597\u5BA0\u7269\u725B"), false);
             src.sendSuccess(new TextComponent("\u00A7e/supercow quirk <safe|mixed|chaos> \u00A77- \u4FEE\u590D\u7248/\u6DF7\u5408/\u539F\u7248BUG\u7248 (>\u6743\u96502)"), false);
             return 1;
@@ -1039,10 +1221,13 @@ public class SuperCowMod implements ModInitializer {
 
         private static int followInfo(CommandSourceStack src) {
             SuperCowConfig cfg = mod().getConfig();
+            // Manual command: String.format is fine here (it never runs on the tick path).
             String line = "\u00A7e\u8DDF\u968F\u8303\u56F4\uFF1A\u00A7f"
                 + String.format("%.1f", cfg.followDistance)
                 + " \u00A77\u683C\uFF08" + net.dabbit.supercow.gui.PetGui.followRangeLabel(cfg)
-                + "\uFF09\u00A78 \u7528 /supercow follow <2-24> \u6216\u9762\u677F\u8C03\u6574";
+                + "\uFF09\u00A78 \u8D70\u51FA " + String.format("%.1f", cfg.followDistance + cfg.followStartBuffer)
+                + " \u683C\u624D\u8D77\u8EAB\uFF0C\u505C\u5728 " + String.format("%.1f", Math.max(1.0D, cfg.followDistance - cfg.followStopDistance))
+                + " \u683C\uFF1B\u7528 /supercow follow <2-24> \u6216\u9762\u677F\u7B2C 7 \u683C\u8C03\u6574";
             src.sendSuccess(new TextComponent(line), false);
             return 1;
         }
@@ -1062,7 +1247,7 @@ public class SuperCowMod implements ModInitializer {
             return 1;
         }
 
-        private static int openGui(CommandSourceStack src) {
+        private static int openGui(CommandSourceStack src, int page) {
             ServerPlayer p = player(src);
             if (p == null) {
                 return 0;
@@ -1072,7 +1257,7 @@ public class SuperCowMod implements ModInitializer {
                 p.sendMessage(new TextComponent("\u00A7c[\u8D85\u7EA7\u725B] \u4F60\u6CA1\u6709\u5B58\u6D3B\u7684\u5BA0\u7269\u725B\u3002"), p.getUUID());
                 return 0;
             }
-            PetGui.open(p, pet, p.getUUID());
+            PetGui.open(p, pet, p.getUUID(), page - 1);
             return 1;
         }
 
@@ -1082,27 +1267,57 @@ public class SuperCowMod implements ModInitializer {
                 return 0;
             }
             UUID owner = p.getUUID();
-            p.sendMessage(new TextComponent("\u00A76\u00A7l\u8D85\u7EA7\u725B \u6280\u80FD\u8868 \u00A77(\u4E0E\u539F\u63D2\u4EF6\u4E00\u81F4)"), owner);
-            p.sendMessage(new TextComponent("\u00A7earrow \u00A77\u7BAD\u77E2 / \u00A7efireball \u00A77\u706B\u7403 / \u00A7epotion \u00A77\u836F\u6C34 / \u00A7efirework \u00A77\u70DF\u82B1"), owner);
-            p.sendMessage(new TextComponent("\u00A7echicken \u00A77\u8F70\u70B8\u9E21 / \u00A7emusic \u00A77\u97F3\u4E50 / \u00A7eexploding_cow \u00A77\u81EA\u7206\u725B"), owner);
-            p.sendMessage(new TextComponent("\u00A7esummon \u00A77\u62A4\u536B\u5C0F\u725B / \u00A7esummon_parrots \u00A77\u9E66\u9E49 / \u00A7esummon_rabbits \u00A77\u5154\u5B50"), owner);
-            p.sendMessage(new TextComponent("\u00A77\u8F6C\u5708\u98DE\u5929\uFF1A\u00A7f\u8FFD\u51FB\u65F6 \u00A7e"
-                + String.format("%.0f%%", mod().getConfig().skySpiralChance * 100.0D)
-                + " \u00A77\u89E6\u53D1 \u00A78(\u5F3A\u5236\uFF1A/supercow skill sky_spiral)"), owner);
+            SuperCowConfig cfg = mod().getConfig();
+            List<Skills.Skill> all = Skills.all();
             int enabledCount = 0;
-            for (Skills.Skill sk : Skills.all()) {
-                if (mod().getConfig().isSkillEnabled(sk.id)) {
+            for (Skills.Skill sk : all) {
+                if (cfg.isSkillEnabled(sk.id)) {
                     enabledCount++;
                 }
             }
-            p.sendMessage(new TextComponent("\u00A77\u62BD\u89C9\u6280\u80FD\uFF1A\u00A7f" + enabledCount + "/" + Skills.all().size()
-                + " \u00A77\u5DF2\u5F00\u542F \u00A78(\u53F3\u952E\u5BA0\u7269\u725B\u6253\u5F00\u9762\u677F\u5F00\u5173)"), owner);
-            p.sendMessage(new TextComponent("\u00A77\u65B0\u6280\u80FD\uFF1A\u00A7fcow_rain milk_bomb moon_walk moo_wave hay_tornado"), owner);
-            p.sendMessage(new TextComponent("\u00A77          \u00A7fbutterfly_swarm zero_gravity mirror_cow teleport_swap confetti"), owner);
+            p.sendMessage(new TextComponent("\u00A76\u00A7l\u8D85\u7EA7\u725B \u6280\u80FD\u8868 \u00A77\u5171 " + all.size()
+                + " \u9879\uFF0C\u5DF2\u5F00\u542F \u00A7f" + enabledCount), owner);
+            // The roster is ~60 entries now: printing every line at once scrolls the chat box
+            // empty, so the listing is paged 10 lines at a time.
+            int perPage = 10;
+            int pages = Math.max(1, (all.size() + perPage - 1) / perPage);
+            for (int i = 0; i < all.size() && i < perPage; i++) {
+                Skills.Skill sk = all.get(i);
+                p.sendMessage(new TextComponent((cfg.isSkillEnabled(sk.id) ? "\u00A7a\u2714 " : "\u00A7c\u2718 ")
+                    + "\u00A7e" + sk.id + " \u00A7f" + sk.display + " \u00A78"
+                    + (sk.rollable ? ("w" + sk.weightNormal + "/" + sk.weightRage) : "\u4E0D\u62BD\u5361")
+                    + " \u00A77" + sk.hint), owner);
+            }
+            if (pages > 1) {
+                int rest = all.size() - perPage;
+                p.sendMessage(new TextComponent("\u00A77\u8FD8\u6709 " + rest + " \u9879\uFF1A\u00A7f/supercow skills 2 \u00A77\u2026 " + pages
+                    + " \u00A78\uFF08\u9875\uFF09\uFF1B\u9762\u677F\u91CC\u6BCF\u9875 27 \u683C\uFF0C\u7528\u7B2C 41/42 \u683C\u7FFB\u9875\uFF09"), owner);
+            }
             p.sendMessage(new TextComponent("\u00A77\u98CE\u683C\uFF1A\u00A7f" + net.dabbit.supercow.combat.Quirks.describe()
                 + " \u00A77(safe=\u5168\u4FEE\u590D\u7248 / mixed=\u6DF7\u5408 / chaos=\u5168BUG\u7248)"), owner);
             p.sendMessage(new TextComponent("\u00A77\u6D3B\u52A8\u6280\u80FD\u5B9E\u4F53\uFF1A\u00A7f" + SkillCleanup.countForOwner(owner)
                 + " \u00A77(\u9E66\u9E49/\u5154\u5B50 \u00A7f" + MinionManager.countForOwner(owner) + "\u00A77)"), owner);
+            return 1;
+        }
+
+        /** /supercow skills <page>: the same listing, starting at the given 1-based page. */
+        private static int skillsPage(CommandSourceStack src, int page) {
+            ServerPlayer p = player(src);
+            if (p == null) {
+                return 0;
+            }
+            UUID owner = p.getUUID();
+            SuperCowConfig cfg = mod().getConfig();
+            List<Skills.Skill> all = Skills.all();
+            int perPage = 10;
+            int pages = Math.max(1, (all.size() + perPage - 1) / perPage);
+            int p0 = Math.max(0, Math.min(pages - 1, page - 1));
+            p.sendMessage(new TextComponent("\u00A76\u6280\u80FD\u8868 \u7B2C " + (p0 + 1) + "/" + pages + " \u9875"), owner);
+            for (int i = p0 * perPage; i < all.size() && i < (p0 + 1) * perPage; i++) {
+                Skills.Skill sk = all.get(i);
+                p.sendMessage(new TextComponent((cfg.isSkillEnabled(sk.id) ? "\u00A7a\u2714 " : "\u00A7c\u2718 ")
+                    + "\u00A7e" + sk.id + " \u00A7f" + sk.display + " \u00A77" + sk.hint), owner);
+            }
             return 1;
         }
 
@@ -1300,7 +1515,6 @@ public class SuperCowMod implements ModInitializer {
             }
             return ok ? 1 : 0;
         }
-    }
 
     public LivingEntity findNearestTarget(ServerPlayer player, Cow pet) {
         if (!(pet.level instanceof ServerLevel)) {

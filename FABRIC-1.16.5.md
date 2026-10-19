@@ -216,34 +216,37 @@
   `getActivePet` 注册表——否则 `stillValid` 抖动会让 `ServerPlayer.tick()` 直接
   `closeContainer()`，真客户端窗口 id 失配后同样表现为"所有东西点不了"。
 
-## 跟随距离：默认"远"（10 格）
+## 跟随距离：默认"远"（20 格）与平滑刹车
 
-原实现的跟随阈值是 `followDistance = 4.0`：牛一离开 4 格就往前走，走到 2.5 格停下。
-贴这么近的结果是牛一直在玩家脚边起步/刹车，蹄声连成一片——听起来像在耳边打鼓。
+原实现的跟随阈值是 `followDistance = 4.0`（后改为 10.0）：牛贴得太近时一直在玩家脚边起步/刹车，蹄声连成一片。
 
-现在的跟随逻辑（`CombatManager.followOwnerIfNeeded`）：
+现在的跟随逻辑（`CombatManager.followOwnerIfNeeded` + `PathfindingManager.tickLegacyMover`）：
 
-- `followDistance` 默认 **10.0 格**（原先 4.0），可在 2 ~ 24 格之间调整。
-- **迟滞（hysteresis）**：超过 `followDistance + followStartBuffer(1.5)` 才开始走；
-  一旦开始走就一直走到 `followStopDistance(1.5)` 才停。否则刚好卡在阈值上时，牛会
-  反复"走一步—停一步"，又变成了原地抖腿。
-- `teleportDistance = 24` 之外直接瞬移过来，不受跟随距离限制。
-- 抽象移动器（`PathfindingManager.tickLegacyMover`）的到达判定也用 `followStopDistance`，
-  保证"停下"的两个判定不会互相打架。
-- **牛的哞哞声默认静音**（`petAmbientSoundEnabled = false`）：跟随时一声接一声太吵，
-  面板/配置里可以开回来。
+- `followDistance` 默认 **20.0 格**（可在 2 ~ 24 格之间调整）；旧配置文件里的 `4.0` / `10.0` 会在首次加载时通过 `configVersion` 与 `repairFollowDefaults()` 一次性迁移到 `20.0`，之后用户手动设回 `4.0` / `10.0` 不会被覆盖。
+- **迟滞（hysteresis）与平滑刹车带**：
+  - 超过 `followDistance + followStartBuffer(4.0) = 24.0` 格才起步追赶；
+  - 追赶进入 `chaseCap(25.0)` 到 `arrive(17.0)` 区间时按二次缓动平滑减速（修复了当 `dist > optimal` 时二次缓动 `t*(2-t)` 变负导致倒走震荡的数学缺陷），到达 `followDistance(20.0)` 附近停稳；
+  - 跟随时禁用战斗横移抖动（`strafing`），直线朝主人走并在停稳后面向主人。
+- `teleportDistance = 32.0` 格之外直接瞬移到主人身边（并自动通过 `groundBelow` 吸附地面，防止瞬移到高空摔死）；若跟随时连续 100 tick 位移不足 0.5 格则自动脱困拉回。
+- **牛的哞哞声默认静音**（`petAmbientSoundEnabled = false`）：跟随时一声接一声太吵，面板/配置里可以开回来。
 
 怎么调：
 
-- 面板第二行新增 `跟随范围` 格（牵引绳图标）：**左键更远 / 右键更近**，每格 1 米，
-  范围 2 ~ 24，图标名字会显示"近 / 中 / 远"和具体格数。
-- 指令：`/supercow follow`（看当前值）、`/supercow follow 14`（直接设置）。
-- 配置文件：`config/supercow-config.json` 的 `followDistance` / `followStopDistance` /
-  `followStartBuffer` / `petAmbientSoundEnabled`。
+- 面板第一行第 7 格 `跟随范围`（指南针图标）：**左键 +2 格 / 右键 -2 格（Shift 左键 20 格远 / Shift 右键 6 格近）**，范围 2 ~ 24，图标名字会显示"近 / 中 / 远"和具体格数。
+- 指令：`/supercow follow`（看当前值）、`/supercow follow <2-24>`（直接设置格数）。
+- 配置文件：`config/supercow-config.json` 的 `followDistance` / `followStopDistance` / `followStartBuffer` / `teleportDistance` / `petAmbientSoundEnabled`。
 
-## 十个"抽象"技能（quirk skills）
+## 启动与 Tick 性能调优
 
-在原来 10 个技能之外再加 10 个（合计 21 个，面板里每一个都能单独开关，权重都是 8 / 14）：
+- **延迟初始化与懒加载**：`onInitializeServer` 仅注册监听器与命令树；配置与存档推迟到 `SERVER_STARTED` 加载；技能对象池与 `QuirkSkills` 分发表按需懒加载。
+- **零分配技能抽取**：`CombatManager.rollSkill` 使用预分配静态数组（容量 96），避免每次抽取构造 `ArrayList`。
+- **降频扫描与无 AI 快路**：`CombatManager.tickPet` 默认每 2 tick（`combatTickInterval=2`）执行一次，无目标时复用短周期缓存；`PathfindingManager.tickLegacyMover` 对无 AI 主牛跳过路径重算，视线检测每 5 tick 刷新一次并修正为眼对眼射线。
+
+## 技能体系（共 62 个：原版 10 + 第一弹 10 + 转圈飞天 1 + 第二弹 41）
+
+面板支持多页浏览（每页 27 个技能，第 41/42 格翻页，`/supercow gui [页码]`、`/supercow skills [页码]`），每个技能都可在面板单独开关，或用 `/supercow skill <id>` 强制释放。
+
+### 第一弹：10 个"抽象"技能（权重 8 / 14）
 
 | id | 名称 | 表现 |
 | --- | --- | --- |
@@ -263,6 +266,17 @@
 - 持续时间统一由 `quirkSkillDurationTicks`（默认 80 tick = 4 秒）控制；刷出来的实体全部登记进
   `SkillCleanup`，宠物死亡 / 召回 / 主人下线时连同 `QuirkSkills.cleanupForOwner` 一起清空。
 - 数值都按"保守"取：这批技能总伤害远低于箭矢，属于趣味技能。
+
+### 第二弹：41 个新技能（含「活塞草羊机」）
+
+全部由 `QuirkSkills` 实现并接入 `SkillCleanup` 自动清理：
+
+- **位移（8）**：`moo_dash`（蛮牛冲撞）、`sapling_launch`（树苗弹射）、`earth_dive`（遁地冲锋）、`wormhole`（虫洞）、`grapple_rope`（套索飞爪）、`tumble_roll`（翻滚）、`spring_step`（弹簧步）、`meteor_jump`（陨石跳）
+- **召唤（7）**：`bee_swarm`（蜂群）、`iron_calf`（铁犊子）、`wolf_pack`（狼群）、`snow_golem_turret`（雪人炮台）、`fire_cracker_chain`（鞭炮串）、`barn_totem`（仓鼠图腾）、`phantom_wings`（幻翼之翼）
+- **控制（7）**：`mud_trap`（泥潭）、`ice_field`（冰封领域）、`sleep_beam`（催眠光波）、`lasso_yank`（缰绳拖拽）、`blizzard`（暴风雪）、`quicksand`（流沙陷坑）、`wind_gust`（疾风冲击）
+- **爆发（6）**：`dairy_volcano`（乳山喷发）、`cream_mine`（奶油地雷）、`spore_bloom`（孢子爆裂）、`lightning_milk`（雷击牛奶）、`stampede`（奔牛践踏）、`buffalo_charge`（野牛冲锋）
+- **增益（6）**：`milk_shield`（牛奶护盾）、`cheese_power`（奶酪之力）、`moo_roar`（哞吼）、`pasture_heal`（牧草愈合）、`sacred_bull_aura`（圣牛光环）、`bull_aura`（霸体冲锋）
+- **趣味与机械（7）**：`milk_rain_blessing`（牛奶祝福雨）、`cow_disguise`（伪装成牛）、`moo_chorus`（哞哞合唱团）、`herd_dance`（群牛舞）、`bell_toll`（牛铃摇响）、`milk_fountain`（奶泉喷涌）、`piston_sheep_machine`（**活塞草羊机**：刷出实体活塞草羊机，往复推刺一下子把敌人顶飞上天）
 
 ## 数值（全部按"保守"取向下调）
 

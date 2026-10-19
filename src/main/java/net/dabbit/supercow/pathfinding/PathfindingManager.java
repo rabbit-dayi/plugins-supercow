@@ -12,6 +12,8 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.animal.Cow;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
@@ -31,12 +33,25 @@ import net.minecraft.world.phys.Vec3;
  */
 public class PathfindingManager {
     private static final Random RANDOM = new Random();
+    /** Ticks the pet may stand inside the braking band before the follow path is parked. */
+    private static final int PARK_TICKS = 12;
+    /**
+     * Where a follow path stops: followStopDistance inside followDistance (an "is the owner walking
+     * into me" band), so walking by someone's side does not make the pet circle them.
+     */
+    private static double followArrive(SuperCowConfig cfg) {
+        double follow = Math.max(2.0D, cfg.followDistance);
+        double stop = cfg.followStopDistance <= 0.0D ? 1.5D : cfg.followStopDistance;
+        return Math.max(0.8D, follow - stop);
+    }
 
     private static class PathState {
         final Mob mob;
         Vec3 targetPos;
         Entity targetEntity;
         double speedModifier;
+        /** true when this path exists to stand near the owner (not to chase something). */
+        boolean followOwner;
         Vec3 lastPos;
         int stuckTicks;
         int ticksActive;
@@ -45,6 +60,8 @@ public class PathfindingManager {
         int lineOfSightTimer;
         boolean cachedLineOfSight = true;
         int jumpCooldown;
+        /** Consecutive ticks spent inside the follow braking band (used to park a follow path). */
+        int arrivedTicks;
         UUID spiralRolledTarget;
         long lastSpiralEndTick;
 
@@ -88,16 +105,32 @@ public class PathfindingManager {
         return mod == null ? null : mod.getConfig();
     }
 
+    /**
+     * The pet proper (not a summoned helper, not a herd copy). Only the main pet is driven by the
+     * follow profile; helpers must keep the vanilla/combat behaviour they always had.
+     */
+    private static boolean isMainPet(Mob mob) {
+        return mob instanceof Cow && mob.getTags().contains("supercow_pet");
+    }
+
     private boolean useLegacyMovement(Mob mob) {
         SuperCowConfig cfg = config();
         return cfg != null && cfg.legacyMovementEnabled && mob.getTags().contains("supercow_pet");
     }
 
-    public void moveToEntity(Mob mob, Entity target, double speedModifier) {
+    /**
+     * Walk to an entity. When {@code followOwner} is set the mover treats the trip as "stand near
+     * the owner" and uses {@link SuperCowConfig#followDistance} as its braking centre instead of
+     * the combat band. Combat callers keep passing false.
+     */
+    public void moveToEntity(Mob mob, Entity target, double speedModifier, boolean followOwner) {
         if (mob == null || target == null || !mob.isAlive()) {
             return;
         }
-        faceEntity(mob, target);
+        boolean follow = followOwner && target instanceof Player && isMainPet(mob);
+        if (!follow) {
+            faceEntity(mob, target);
+        }
         boolean legacy = useLegacyMovement(mob);
         PathState state = activePaths.get(mob.getUUID());
         if (state == null) {
@@ -108,12 +141,24 @@ public class PathfindingManager {
             state.targetPos = target.position();
             state.speedModifier = speedModifier;
             state.legacy = legacy;
+            state.followOwner = false;
+        }
+        state.followOwner = follow;
+        if (follow) {
+            // A follow path is long-lived: the owner keeps walking. Reusing the old state must not
+            // inherit the "standing inside the band" tick counter from a previous stop.
+            state.arrivedTicks = 0;
         }
         if (!legacy) {
             mob.getNavigation().moveTo(target, speedModifier);
         } else {
             mob.getNavigation().stop();
         }
+    }
+
+    /** Walk to an entity for combat / escort purposes (combat movement band). */
+    public void moveToEntity(Mob mob, Entity target, double speedModifier) {
+        moveToEntity(mob, target, speedModifier, false);
     }
 
     public void moveToPosition(Mob mob, Vec3 pos, double speedModifier) {
@@ -131,6 +176,7 @@ public class PathfindingManager {
             state.targetPos = pos;
             state.speedModifier = speedModifier;
             state.legacy = legacy;
+            state.followOwner = false;
         }
         if (!legacy) {
             mob.getNavigation().moveTo(pos.x, pos.y, pos.z, speedModifier);
@@ -145,8 +191,14 @@ public class PathfindingManager {
         }
         // Stop navigation first so a vanilla path cannot keep pushing after the state is gone.
         mob.getNavigation().stop();
-        activePaths.remove(mob.getUUID());
+        PathState state = activePaths.remove(mob.getUUID());
         spirals.remove(mob.getUUID());
+        if (state != null) {
+            // Zero the motion we wrote, or a no-AI pet keeps sliding on its last velocity vector
+            // for a tick or two after the path is gone ("the cow glides to a stop").
+            double dy = state.legacy ? mob.getDeltaMovement().y : 0.0D;
+            mob.setDeltaMovement(0.0D, dy, 0.0D);
+        }
     }
 
     public void stopPathfinding(UUID mobUuid) {
@@ -206,6 +258,14 @@ public class PathfindingManager {
     }
 
     public void tick() {
+        // Hot path: this runs on the server thread every tick, so nothing here allocates while the
+        // map is empty (the common case when the player is standing still or has no pet out).
+        if (activePaths.isEmpty()) {
+            tickSpirals();
+            return;
+        }
+        // Config is looked up once per tick instead of once per pet per tick.
+        SuperCowConfig cfg = config();
         Iterator<Map.Entry<UUID, PathState>> it = activePaths.entrySet().iterator();
         while (it.hasNext()) {
             Map.Entry<UUID, PathState> entry = it.next();
@@ -231,7 +291,7 @@ public class PathfindingManager {
             }
 
             if (state.legacy) {
-                tickLegacyMover(state);
+                tickLegacyMover(state, cfg);
             } else if (!tickVanillaMover(state)) {
                 it.remove();
             }
@@ -253,17 +313,25 @@ public class PathfindingManager {
             return;
         }
         long now = SuperCowMod.getServerTicksStatic();
-        for (UUID uuid : new java.util.ArrayList<>(spirals.keySet())) {
-            SkySpiral spiral = spirals.get(uuid);
+        // Iterator, not a defensive ArrayList copy: tickSkySpiral only touches its own entry.
+        Iterator<Map.Entry<UUID, SkySpiral>> it = spirals.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<UUID, SkySpiral> entry = it.next();
+            SkySpiral spiral = entry.getValue();
             if (spiral == null) {
+                it.remove();
                 continue;
             }
             Mob mob = spiral.state != null ? spiral.state.mob : null;
             if (mob == null || !mob.isAlive() || mob.removed) {
-                spirals.remove(uuid);
+                it.remove();
                 continue;
             }
-            tickSkySpiral(mob, spiral, now, cfg, cfg.legacyMoveSpeed);
+            // tickSkySpiral returns false when the episode ends; remove via the iterator so
+            // multiple simultaneous spirals never trigger ConcurrentModificationException.
+            if (!tickSkySpiral(mob, spiral, now, cfg, cfg.legacyMoveSpeed)) {
+                it.remove();
+            }
         }
     }
 
@@ -314,19 +382,85 @@ public class PathfindingManager {
     // ------------------------------------------------------------------ legacy "abstract" movement
 
     /**
+     * Braking band while standing near the owner. The pet walks at full speed until it is
+     * followDistance away, then eases down to a complete stop exactly at followDistance, so the
+     * player hears the hooves stop at the configured range instead of 1.4 blocks from their face.
+     *
+     * <p>Values come from the live config, so /supercow follow and the panel's slot 7 take effect
+     * on the next tick without touching legacyOptimalDistance.</p>
+     *
+     * @return {arrive, optimal, chaseCap}: no forward drive below arrive, full speed above
+     *         chaseCap, eased brake in between
+     */
+    private static double[] followBands(SuperCowConfig cfg) {
+        double optimal = Math.max(2.0D, cfg.followDistance);
+        // Brake over the inner followBrakeDistance blocks below the stand-off radius.
+        double brake = cfg.followBrakeDistance;
+        if (brake <= 0.0D) {
+            brake = 6.0D;
+        }
+        double maxBrake = Math.max(0.5D, (optimal - 1.5D) * 0.75D);
+        if (brake > maxBrake) {
+            brake = maxBrake;
+        }
+        double arrive = Math.max(1.5D, optimal - brake);
+        // Full speed only far outside the stand-off radius; the eased brake spans the whole band
+        // instead of the outer 25% (the old cap made the pet cover the last 5 blocks at a crawl).
+        double chaseCap = Math.max(1.0D, cfg.followChaseBand);
+        return new double[] {arrive, optimal, optimal * chaseCap};
+    }
+
+    /**
+     * Braking band while chasing a mob: the legacy gun-fight radius (legacyOptimalDistance),
+     * biased outward for rage, plus the close-range stop so the pet does not shove into its target.
+     *
+     * @return {arrive, optimal, chaseCap}
+     */
+    private static double[] combatBands(PathState state, SuperCowConfig cfg) {
+        double optimal = Math.max(2.0D, cfg.legacyOptimalDistance);
+        if (state.speedModifier > 1.2D) {
+            optimal *= 1.25D;
+        }
+        double arrive = Math.max(1.5D, cfg.legacyFollowStopDistance);
+        return new double[] {arrive, optimal, optimal};
+    }
+
+    /**
+     * Full stop radius for a follow path: the pet parks at followDistance, and only brakes early
+     * when the owner is walking into it. Returns -1 when this path is not a follow path.
+     */
+    public double followStopRadius(UUID mobUuid) {
+        if (mobUuid == null) {
+            return -1.0D;
+        }
+        PathState state = activePaths.get(mobUuid);
+        if (state == null || !state.followOwner) {
+            return -1.0D;
+        }
+        SuperCowConfig cfg = config();
+        return cfg == null ? -1.0D : Math.max(1.0D, cfg.followDistance);
+    }
+
+    /**
      * Rebuilds the movement vector exactly like the Bukkit plugin did: distance-band speed,
      * drifting strafe, line-of-sight detour, obstacle rotation and jumping. The result is
      * written straight into the entity velocity.
+     *
+     * <p>The speed band is picked per path: {@link #followBands} when the pet is walking to its
+     * owner, {@link #combatBands} when it is chasing a mob.</p>
      */
-    private void tickLegacyMover(PathState state) {
-        SuperCowConfig cfg = config();
+    private void tickLegacyMover(PathState state, SuperCowConfig cfg) {
         Mob mob = state.mob;
         if (cfg == null) {
             return;
         }
         double maxSpeed = cfg.legacyMoveSpeed;
         Vec3 pos = mob.position();
-        double dist = pos.distanceTo(state.targetPos);
+        // Horizontal distance on purpose: measuring to the owner's feet made the band flip back and
+        // forth on every jump ("the cow hops in place at the edge of the radius").
+        double dx0 = pos.x - state.targetPos.x;
+        double dz0 = pos.z - state.targetPos.z;
+        double dist = Math.sqrt(dx0 * dx0 + dz0 * dz0);
 
         // Skill: "转圈飞天". The original velocity mover had no vertical clamp worth the name and
         // could path itself into the sky; here it is a rare, self-terminating episode that owns
@@ -338,14 +472,44 @@ public class PathfindingManager {
         }
         maybeStartSkySpiral(state, cfg, now);
 
-        SuperCowConfig scfg = config();
-        double arrive = scfg != null && scfg.followStopDistance > 0.0D
-            ? Math.max(0.5D, scfg.followStopDistance) : 2.0D;
-        if (dist < arrive) {
-            // Inside the fight: stop pushing forward but let the strafe wiggle continue.
+        // Following the owner and chasing a mob are two different movement profiles.
+        boolean followingOwner;
+        boolean inCombat;
+        if (state.targetEntity == null) {
+            followingOwner = state.followOwner;
+            inCombat = false;
+        } else {
+            inCombat = !(state.targetEntity instanceof net.minecraft.world.entity.player.Player);
+            followingOwner = !inCombat;
+        }
+        double[] bands = followingOwner ? followBands(cfg) : combatBands(state, cfg);
+        double arrive = bands[0];
+        double optimal = bands[1];
+        double chaseCap = bands[2];
+        if (dist < followArrive(cfg) && followingOwner) {
+            // Owner walked into the pet (inside followDistance - followStopDistance): hold position
+            // but keep facing them, so the cow does not look like it is bolting the other way.
             mob.getNavigation().stop();
+            faceEntity(mob, state.targetEntity);
             applyVelocity(mob, 0.0D, 0.0D, mob.getDeltaMovement().y, maxSpeed);
             return;
+        }
+        if (dist < arrive) {
+            // Inside the stand-off radius: stop pushing forward but let the strafe wiggle continue.
+            mob.getNavigation().stop();
+            applyVelocity(mob, 0.0D, 0.0D, mob.getDeltaMovement().y, maxSpeed);
+            if (followingOwner && ++state.arrivedTicks > PARK_TICKS) {
+                // Parked inside the stand-off radius: CombatManager drops the path on its next tick
+                // (the full stop radius is followDistance).
+                state.arrivedTicks = 0;
+            }
+            return;
+        }
+        state.arrivedTicks = 0;
+        if (followingOwner) {
+            // Keep the pet looking at the player while it walks up instead of moon-walking after
+            // the face-at-start yaw fix (it was still turning its head once and walking backwards).
+            faceEntity(mob, state.targetEntity);
         }
 
         state.lineOfSightTimer--;
@@ -361,14 +525,23 @@ public class PathfindingManager {
             direction = alternativeDirection(mob, state.targetPos, cfg);
         }
 
+        // Speed band, expressed relative to the profile's optimal distance so it adapts to any
+        // /supercow follow setting (2..24) instead of the old hard-coded 8-block centre.
+        //   dist >= optimal           -> full speed (still travelling)
+        //   arrive .. optimal         -> linear brake, exactly 0 at "arrive"
+        // A band narrower than this would make the pet crawl, so keep a floor under it.
         double speed;
-        double optimal = cfg.legacyOptimalDistance;
-        if (dist > optimal * 1.5D) {
+        double bandWidth = Math.max(2.0D, chaseCap - arrive);
+        if (dist >= chaseCap) {
             speed = maxSpeed;
-        } else if (dist < optimal * 0.5D) {
-            speed = 0.0D;
         } else {
-            speed = Mth.clamp((dist - optimal) * (maxSpeed / 6.0D), 0.0D, maxSpeed);
+            double t = Mth.clamp((dist - arrive) / bandWidth, 0.0D, 1.0D);
+            if (t <= 0.0D) {
+                speed = 0.0D;
+            } else {
+                // ease-out so the last metre is a smooth stop rather than a visible cut
+                speed = maxSpeed * (t * (2.0D - t));
+            }
         }
         speed *= Math.min(1.5D, Math.max(0.35D, state.speedModifier));
 
@@ -382,9 +555,7 @@ public class PathfindingManager {
         // Kept for combat only: while it is just walking (follow mode, no target) the pet should
         // walk a straight line like a normal animal instead of dancing in place.
         // Following the owner is not combat: the pet should walk, not dance.
-        boolean inCombat = state.targetEntity != null
-            && !(state.targetEntity instanceof net.minecraft.world.entity.player.Player);
-        boolean strafing = !cfg.legacyStrafeOnlyInCombat || inCombat;
+        boolean strafing = (!cfg.legacyStrafeOnlyInCombat || inCombat) && !followingOwner;
         double vx = flat.x;
         double vz = flat.z;
         if (strafing) {
@@ -398,7 +569,12 @@ public class PathfindingManager {
             Vec3 travel = state.targetPos.subtract(pos);
             Vec3 flatTravel = new Vec3(travel.x, 0.0D, travel.z);
             if (flatTravel.lengthSqr() > 1.0E-4D) {
-                double walkSpeed = Math.min(cfg.legacyTravelSpeed, Math.max(0.12D, dist * 0.12D));
+                double walkSpeed;
+                if (followingOwner) {
+                    walkSpeed = speed;
+                } else {
+                    walkSpeed = Math.min(cfg.legacyTravelSpeed, Math.max(0.12D, dist * 0.12D));
+                }
                 flatTravel = flatTravel.normalize().scale(walkSpeed);
                 vx = flatTravel.x;
                 vz = flatTravel.z;
@@ -510,12 +686,12 @@ public class PathfindingManager {
         }
     }
 
-    private void tickSkySpiral(Mob mob, SkySpiral spiral, long now, SuperCowConfig cfg, double maxSpeed) {
+    private boolean tickSkySpiral(Mob mob, SkySpiral spiral, long now, SuperCowConfig cfg, double maxSpeed) {
         double maxHeight = Math.max(1.0D, cfg.skySpiralMaxHeight);
         double height = mob.getY() - spiral.anchorY;
         if (now >= spiral.endTick || height >= maxHeight) {
             endSkySpiral(spiral, now);
-            return;
+            return false;
         }
         double angle = spiral.baseAngle + (now - spiral.startTick) * cfg.skySpiralSpinSpeed;
         double speed = maxSpeed * 1.1D;
@@ -534,6 +710,7 @@ public class PathfindingManager {
             mob.setDeltaMovement(dm.x, Math.max(dm.y, lift), dm.z);
             mob.hasImpulse = true;
         }
+        return true;
     }
 
     private void endSkySpiral(SkySpiral spiral, long now) {
@@ -545,33 +722,30 @@ public class PathfindingManager {
                 spiral.state.lastPos = mob.position();
             }
         }
-        if (mob != null) {
-            spirals.remove(mob.getUUID());
-            if (spiral.standalone) {
-                // No chase target existed: drop the throw-away path state so the pet is not left
-                // with a fake "stay still" route after landing.
-                activePaths.remove(mob.getUUID());
-            }
+        if (mob != null && spiral.standalone) {
+            // No chase target existed: drop the throw-away path state so the pet is not left
+            // with a fake "stay still" route after landing.
+            activePaths.remove(mob.getUUID());
         }
     }
 
     private void applyVelocity(Mob mob, double vx, double vz, double vy, double maxSpeed) {
         double limit = Math.max(0.05D, maxSpeed * 1.2D);
-        double dx = Mth.clamp(finite(vx), -limit, limit);
-        double dy = Mth.clamp(finite(vy), -1.0D, 1.0D);
-        double dz = Mth.clamp(finite(vz), -limit, limit);
         if (!mob.isNoAi()) {
-            mob.setDeltaMovement(dx, dy, dz);
+            mob.setDeltaMovement(Mth.clamp(finite(vx), -limit, limit), Mth.clamp(finite(vy), -1.0D, 1.0D),
+                Mth.clamp(finite(vz), -limit, limit));
             return;
         }
+        double dx = Mth.clamp(finite(vx), -limit, limit);
+        double dy = Mth.clamp(finite(vy), -1.5D, 1.5D);
+        double dz = Mth.clamp(finite(vz), -limit, limit);
         // A no-AI mob does not run vanilla travel in 1.16.5: its velocity is never applied and it
         // neither walks nor falls. The "abstract" mover therefore writes the vector and displaces
         // the entity itself, including a hand-rolled gravity/step-up so it can walk on terrain.
+        double terminal = 1.5D;
         if (!mob.isOnGround()) {
-            // Positive vertical motion (jump push, sky spiral lift) is kept but decays, so an
-            // upward push can actually leave the ground without the pet hovering forever.
             double gravity = dy > 0.0D ? 0.05D : 0.08D;
-            dy = Math.max(dy - gravity, -0.6D);
+            dy = Math.max(dy - gravity, -terminal);
         } else if (dy < 0.0D) {
             dy = 0.0D;
         }
@@ -588,9 +762,11 @@ public class PathfindingManager {
 
     private Vec3 alternativeDirection(Mob mob, Vec3 targetPos, SuperCowConfig cfg) {
         Vec3 pos = mob.position();
+        Vec3 toTarget = targetPos.subtract(pos);
+        double directDist = Math.sqrt(toTarget.x * toTarget.x + toTarget.z * toTarget.z);
         Vec3 best = null;
-        double bestDist = Double.MAX_VALUE;
-        double radius = cfg.legacyOptimalDistance;
+        double bestDist = directDist;
+        double radius = Math.min(4.0D, Math.max(2.0D, cfg.legacyOptimalDistance * 0.5D));
         for (int angle = 0; angle < 360; angle += 45) {
             double rad = Math.toRadians(angle);
             Vec3 candidate = new Vec3(
@@ -598,20 +774,22 @@ public class PathfindingManager {
                 pos.y,
                 pos.z + Math.sin(rad) * radius
             );
-            if (!hasLineOfSightFrom(mob, candidate, targetPos)) {
+            if (!hasLineOfSightFrom(mob, pos, candidate)) {
                 continue;
             }
             if (!isLocationSafe(mob, candidate)) {
                 continue;
             }
-            double d = candidate.distanceTo(targetPos);
+            double dx = candidate.x - targetPos.x;
+            double dz = candidate.z - targetPos.z;
+            double d = Math.sqrt(dx * dx + dz * dz);
             if (d < bestDist) {
                 bestDist = d;
                 best = candidate;
             }
         }
         if (best == null) {
-            return targetPos.subtract(pos);
+            return toTarget;
         }
         return best.subtract(pos);
     }
@@ -622,7 +800,8 @@ public class PathfindingManager {
 
     private static boolean hasLineOfSightFrom(Mob mob, Vec3 from, Vec3 to) {
         Vec3 eye = new Vec3(from.x, from.y + 1.0D, from.z);
-        BlockHitResult hit = mob.level.clip(new ClipContext(eye, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mob));
+        Vec3 targetEye = new Vec3(to.x, to.y + 1.0D, to.z);
+        BlockHitResult hit = mob.level.clip(new ClipContext(eye, targetEye, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mob));
         return hit.getType() == HitResult.Type.MISS;
     }
 

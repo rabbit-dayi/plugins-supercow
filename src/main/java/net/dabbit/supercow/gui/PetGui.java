@@ -69,17 +69,52 @@ public final class PetGui {
     private static final int SLOT_CALL = 38;
     private static final int SLOT_ALL_ON = 39;
     private static final int SLOT_ALL_OFF = 40;
+    private static final int SLOT_PREV_PAGE = 41;
+    private static final int SLOT_NEXT_PAGE = 42;
     private static final int SLOT_CLOSE = 53;
     private static final String[] INFO_KEYS = {
         "宠物信息", "技能开关数量", "宠物状态", "使用说明"
     };
 
+    /** Skill slots per page: the 27 slots of rows 2..4, between the info row and the action row. */
+    public static final int SKILLS_PER_PAGE = 27;
+
+    /** Total number of skill pages for the current roster (always at least one). */
+    public static int pageCount() {
+        int size = Skills.all().size();
+        return Math.max(1, (size + SKILLS_PER_PAGE - 1) / SKILLS_PER_PAGE);
+    }
+
+    /** Wraps a page index into [0, pageCount()). */
+    public static int clampPage(int page) {
+        int pages = pageCount();
+        if (page < 0) {
+            return pages - 1;
+        }
+        return page >= pages ? 0 : page;
+    }
+
     public static final double FOLLOW_MIN = 2.0D;
     public static final double FOLLOW_MAX = 24.0D;
 
+    /**
+     * Moves the page of an already-open panel from the command layer, e.g. /supercow gui 2.
+     * Returns false when the viewer does not have our menu open.
+     */
+    public static boolean setPage(ServerPlayer player, int page) {
+        if (player == null || !(player.containerMenu instanceof PetMenu)) {
+            return false;
+        }
+        PetMenu menu = (PetMenu) player.containerMenu;
+        menu.skillPage = clampPage(page);
+        menu.refresh();
+        menu.pushContents(player);
+        return true;
+    }
+
     public static double clampFollow(double value) {
         if (Double.isNaN(value)) {
-            return 10.0D;
+            return 20.0D;
         }
         return Math.max(FOLLOW_MIN, Math.min(FOLLOW_MAX, Math.round(value)));
     }
@@ -99,10 +134,21 @@ public final class PetGui {
     }
 
     public static void open(ServerPlayer player, Cow pet, UUID ownerUuid) {
+        open(player, pet, ownerUuid, 0);
+    }
+
+    /** Opens the panel on the given 0-based skill page. */
+    public static void open(ServerPlayer player, Cow pet, UUID ownerUuid, final int page) {
         SimpleContainer container = new SimpleContainer(SIZE);
+        final int startPage = clampPage(page);
         player.openMenu(new SimpleMenuProvider(
-            (syncId, inv, p) -> new PetMenu(syncId, inv, container, pet.getUUID(), ownerUuid,
-                p instanceof ServerPlayer ? (ServerPlayer) p : player),
+            (syncId, inv, p) -> {
+                PetMenu menu = new PetMenu(syncId, inv, container, pet.getUUID(), ownerUuid,
+                    p instanceof ServerPlayer ? (ServerPlayer) p : player);
+                menu.skillPage = startPage;
+                menu.refresh();
+                return menu;
+            },
             new TextComponent("§6§l超级牛 · 面板")));
     }
 
@@ -211,6 +257,9 @@ public final class PetGui {
             }
         }
 
+        /** 0-based page of the skill grid currently rendered for this viewer. */
+        private int skillPage;
+
         private void renderPanel() {
             SuperCowMod mod = SuperCowMod.getInstance();
             SuperCowConfig cfg = mod.getConfig();
@@ -251,15 +300,16 @@ public final class PetGui {
             }
             container.setItem(1, make(Items.EXPERIENCE_BOTTLE, "§a技能开关 §f" + enabled + "/" + Skills.all().size(),
                 java.util.Arrays.asList("§7已启用：§f" + enabled + " / " + Skills.all().size(),
-                    "§7左键 = 全部开启", "§7右键 = 全部关闭")));
+                    "§7左键 = 全部开启", "§7右键 = 全部关闭",
+                    "§7共 " + pageCount() + " 页，每页 " + SKILLS_PER_PAGE + " 个")));
             container.setItem(2, make(Items.GOLDEN_APPLE, "§d宠物状态",
                 java.util.Arrays.asList("§7存活：" + (pet != null && pet.isAlive() ? "§a是" : "§c否"),
                     "§7坐标：" + (pet != null ? String.format("§f%.0f, %.0f, %.0f", pet.getX(), pet.getY(), pet.getZ()) : "§7-"))));
             container.setItem(3, make(Items.PAPER, "§e使用说明 §8(只读)",
                 java.util.Arrays.asList("§7右键宠物牛打开本面板，潜行右键看文字信息", "§7手里拿干草块右键 = 喂食",
                     "§7第一排：宠物信息 / 技能开关(左键全开 右键全关) / 宠物状态(左键刷新) / 本页",
-                    "§7第二排起：每个技能一格，左键开 / 右键关",
-                    "§7最下一排：战斗模式 / 召唤模式 / 技能风格 / 治疗 / 召回 / 召唤 / 全开 / 全关 / 关闭")));
+                    "§7第二~四排：技能格，左键开 / 右键关；第 41/42 格是上/下一页",
+                    "§7最下一排：战斗模式 / 召唤模式 / 技能风格 / 治疗 / 召回 / 召唤 / 全开 / 全关 / 上页 / 下页 / 关闭")));
 
             container.setItem(SLOT_MODE, make(Items.SHIELD,
                 "§b战斗模式 §f" + (data != null ? PetMode.fromString(data.combatMode).getDisplayName() : "-"),
@@ -283,8 +333,20 @@ public final class PetGui {
                     "§8指令：/supercow follow <格数>")));
 
             List<Skills.Skill> skills = Skills.all();
-            for (int i = 0; i < skills.size() && SKILL_START + i < SLOT_HEAL; i++) {
-                Skills.Skill skill = skills.get(i);
+            int pages = pageCount();
+            skillPage = clampPage(skillPage);
+            int firstSkill = skillPage * SKILLS_PER_PAGE;
+            // Only render the current page: 27 slots, so the grid no longer silently drops the
+            // skills past SLOT_HEAL once the roster grows.
+            for (int i = 0; i < SKILLS_PER_PAGE; i++) {
+                int index = firstSkill + i;
+                int slot = SKILL_START + i;
+                if (index >= skills.size()) {
+                    container.setItem(slot, make(Items.GRAY_STAINED_GLASS_PANE, "§8空白技能位",
+                        java.util.Collections.singletonList("§8本页没有更多技能")));
+                    continue;
+                }
+                Skills.Skill skill = skills.get(index);
                 boolean on = cfg.isSkillEnabled(skill.id);
                 List<String> lore = new ArrayList<>();
                 lore.add("§7" + skill.hint);
@@ -294,9 +356,21 @@ public final class PetGui {
                     lore.add("§8不参与随机抽卡");
                 }
                 lore.add(on ? "§a状态：开启 §8(点击关闭)" : "§c状态：关闭 §8(点击开启)");
-                container.setItem(SKILL_START + i, make(on ? Items.LIME_DYE : Items.GRAY_DYE,
+                lore.add("§8序号 " + (index + 1) + " / " + skills.size() + " · 第 " + (skillPage + 1) + "/" + pages + " 页");
+                container.setItem(slot, make(on ? Items.LIME_DYE : Items.GRAY_DYE,
                     (on ? "§a✔ " : "§7✘ ") + skill.display, lore));
             }
+            // Page arrows live on the action row so the whole grid stays clickable.
+            container.setItem(SLOT_PREV_PAGE, make(Items.ARROW,
+                "§e← 上一页 §8(" + (skillPage + 1) + "/" + pages + ")",
+                java.util.Arrays.asList("§7每页 " + SKILLS_PER_PAGE + " 个技能",
+                    "§7Sneak + 左键 = 跳到第一页",
+                    "§8可用 /supercow gui <页码> 直接跳转")));
+            container.setItem(SLOT_NEXT_PAGE, make(Items.ARROW,
+                "§e下一页 → §8(" + (skillPage + 1) + "/" + pages + ")",
+                java.util.Arrays.asList("§7每页 " + SKILLS_PER_PAGE + " 个技能",
+                    "§7Sneak + 左键 = 跳到最后一页",
+                    "§8可用 /supercow gui <页码> 直接跳转")));
 
             container.setItem(SLOT_HEAL, make(Items.GOLDEN_CARROT, "§a治疗宠物", java.util.Collections.singletonList("§7把生命补满")));
             container.setItem(SLOT_RECALL, make(Items.LEAD, "§e收回宠物", java.util.Collections.singletonList("§7宠物回到待命")));
@@ -353,8 +427,10 @@ public final class PetGui {
             PetData data = mod.getPetData(ownerUuid);
             List<Skills.Skill> skills = Skills.all();
 
-            if (slot >= SKILL_START && slot < SKILL_START + skills.size()) {
-                Skills.Skill skill = skills.get(slot - SKILL_START);
+            int skillIndex = slot >= SKILL_START && slot < SKILL_START + SKILLS_PER_PAGE
+                ? skillPage * SKILLS_PER_PAGE + (slot - SKILL_START) : -1;
+            if (skillIndex >= 0 && skillIndex < skills.size()) {
+                Skills.Skill skill = skills.get(skillIndex);
                 // Left click toggles, right click forces "off" (== a clear "this one is disabled").
                 boolean now = button == 1 ? false : !cfg.isSkillEnabled(skill.id);
                 cfg.setSkillEnabled(skill.id, now);
@@ -441,6 +517,20 @@ public final class PetGui {
                 } else {
                     tell(player, "§c宠物不在这个世界");
                 }
+            } else if (slot == SLOT_PREV_PAGE) {
+                if (player.isShiftKeyDown()) {
+                    skillPage = 0;
+                } else {
+                    skillPage = clampPage(skillPage - 1);
+                }
+                tell(player, "§e第 §f" + (skillPage + 1) + "§e/§f" + pageCount() + " §e页");
+            } else if (slot == SLOT_NEXT_PAGE) {
+                if (player.isShiftKeyDown()) {
+                    skillPage = pageCount() - 1;
+                } else {
+                    skillPage = clampPage(skillPage + 1);
+                }
+                tell(player, "§e第 §f" + (skillPage + 1) + "§e/§f" + pageCount() + " §e页");
             } else if (slot == SLOT_ALL_ON || slot == SLOT_ALL_OFF) {
                 boolean on = slot == SLOT_ALL_ON;
                 for (Skills.Skill skill : Skills.all()) {

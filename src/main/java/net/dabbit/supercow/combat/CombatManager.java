@@ -2,6 +2,7 @@ package net.dabbit.supercow.combat;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
@@ -10,6 +11,7 @@ import net.dabbit.supercow.config.SuperCowConfig;
 import net.dabbit.supercow.data.PetData;
 import net.dabbit.supercow.pathfinding.PathfindingManager;
 import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.network.chat.TextComponent;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -68,6 +70,12 @@ public class CombatManager {
     private final SummonManager summonManager;
     private final Random random = new Random();
 
+    // Reusable scratch buffers for rollWeightedSkill (attack hot path: no per-attack allocation).
+    private java.util.List<Skills.Skill> rollScratchState;
+    private Skills.Skill[] rollScratchAll = new Skills.Skill[0];
+    private Skills.Skill[] rollPoolNormal = new Skills.Skill[96];
+    private Skills.Skill[] rollPoolRage = new Skills.Skill[96];
+
     private final Map<UUID, PetMode> petModes = new HashMap<>();
     private final Map<UUID, LivingEntity> currentTargets = new HashMap<>();
     private final Map<UUID, Long> lastAttackTick = new HashMap<>();
@@ -101,6 +109,10 @@ public class CombatManager {
         }
         if (mode == PetMode.PASSIVE) {
             clearTarget(ownerUuid);
+            Cow pet = mod.getActivePet(ownerUuid);
+            if (pet != null) {
+                pathfindingManager.stopPathfinding(pet);
+            }
         }
     }
 
@@ -154,14 +166,24 @@ public class CombatManager {
         if (prev != null && prev.isAlive()) {
             prev.setGlowing(false);
         }
-        // FIXED LEAK: the per-target guard maps were never pruned, so every entity the pet ever
-        // attacked stayed referenced (tick snapshots, stuck timers, blacklist entries) forever.
+        // FIXED LEAK: prune per-target tick tracking maps on target release, while keeping
+        // untickableTargets/untickableSnapshots until their 600-tick blacklist window expires
+        // (and cleaning any already-expired blacklist entries opportunistically).
         if (prev != null) {
             UUID id = prev.getUUID();
             targetTickSnapshots.remove(id);
             targetStuckSinceTick.remove(id);
-            untickableTargets.remove(id);
-            untickableSnapshots.remove(id);
+        }
+        if (!untickableTargets.isEmpty()) {
+            long now = mod.getServerTicks();
+            Iterator<Map.Entry<UUID, Long>> it = untickableTargets.entrySet().iterator();
+            while (it.hasNext()) {
+                Map.Entry<UUID, Long> e = it.next();
+                if (e.getValue() == null || e.getValue().longValue() <= now) {
+                    untickableSnapshots.remove(e.getKey());
+                    it.remove();
+                }
+            }
         }
     }
 
@@ -331,28 +353,245 @@ public class CombatManager {
         return true;
     }
 
+    /**
+     * Keep the passive pet near its owner.
+     *
+     * <p>Two thresholds, one owner lookup, one distance computation per call:</p>
+     * <ul>
+     *   <li><b>start</b> = followDistance + followStartBuffer (default 20 + 4 = 24): the pet is only
+     *       asked to move once it has clearly drifted out of the stand-off radius, which is what
+     *       stops the "shuffle back and forth" jitter the player complained about.</li>
+     *   <li><b>stop</b> = followDistance (default 20): once the path is a follow path, the pet
+     *       keeps walking until it has actually reached the stand-off radius. The deceleration
+     *       curve itself lives in PathfindingManager (followBands), so the pet is already crawling
+     *       for the last few blocks and stops at followDistance instead of running into the
+     *       player. When the owner walks towards the pet it can still close up to
+     *       followDistance - followStopDistance (default 18.5) before the path is dropped.</li>
+     * </ul>
+     * <p>The old code stopped the path as soon as the pet was within 1.5 blocks, which is why the
+     * pet ended up glued to the player even with a "far" follow distance.</p>
+     */
     private void followOwnerIfNeeded(Cow pet, ServerPlayer owner, SuperCowConfig cfg) {
         if (owner == null || !owner.isAlive() || owner.level != pet.level) {
             return;
         }
-        double dist = pet.distanceTo(owner);
+        // Horizontal distance for walking/braking so a simple jump does not re-trigger walking,
+        // plus vertical separation so climbing a tower or vertical /tp still teleports/follows.
+        double dx = pet.getX() - owner.getX();
+        double dy = Math.abs(pet.getY() - owner.getY());
+        double dz = pet.getZ() - owner.getZ();
+        double dist = Math.sqrt(dx * dx + dz * dz);
+        double dist3d = Math.sqrt(dx * dx + dy * dy + dz * dz);
         double follow = Math.max(2.0D, cfg.followDistance);
-        double stop = Math.max(0.5D, cfg.followStopDistance);
-        // Hysteresis: with a single threshold the pet would start walking the instant it drifted
-        // 0.01 block past the line and stop as soon as it crossed back, which reads as the pet
-        // shuffling in place right next to the player.
-        double resume = Math.max(follow, stop) + Math.max(0.0D, cfg.followStartBuffer);
-        if (dist > cfg.teleportDistance) {
+        double startRadius = follow + Math.max(0.0D, cfg.followStartBuffer);
+        double teleport = Math.max(startRadius + 4.0D, cfg.teleportDistance);
+        if (dist3d > teleport || dy > 16.0D) {
             pathfindingManager.stopPathfinding(pet);
-            pet.teleportTo(owner.getX() + 1.5D, owner.getY(), owner.getZ() + 1.5D);
-        } else if (pathfindingManager.hasActivePath(pet.getUUID())) {
-            // Already walking towards the owner: hold the line until the stand-off distance.
-            if (dist <= stop) {
+            double tx = owner.getX() + 1.5D;
+            double tz = owner.getZ() + 1.5D;
+            double ty = owner.getY();
+            if (owner.level instanceof ServerLevel) {
+                double groundY = SuperCowMod.groundBelow((ServerLevel) owner.level, tx, ty + 2.0D, tz);
+                if (!Double.isNaN(groundY)) {
+                    ty = groundY;
+                }
+            }
+            pet.teleportTo(tx, ty, tz);
+            pet.setDeltaMovement(0.0D, 0.0D, 0.0D);
+            return;
+        }
+        double stopRadius = pathfindingManager.followStopRadius(pet.getUUID());
+        if (stopRadius > 0.0D) {
+            // A follow path is running: the mover brakes over followBrakeDistance and parks at
+            // followDistance, so it is dropped exactly there instead of after gliding inside it.
+            if (dist <= stopRadius && dy <= 6.0D) {
                 pathfindingManager.stopPathfinding(pet);
             }
-        } else if (dist > resume) {
-            pathfindingManager.moveToEntity(pet, owner, 1.2D);
+        } else if (dist > startRadius || dy > 8.0D) {
+            // Full speed in the dispatcher: the actual walking speed comes from the follow bands.
+            pathfindingManager.moveToEntity(pet, owner, 1.0D, true);
         }
+    }
+
+    /**
+     * Safety net for the passive follow (see {@link #followOwnerIfNeeded}): a no-AI pet only walks
+     * while it owns a follow path, and that path is dropped every time the pet parks inside its
+     * stand-off radius. If the regular re-arm (this class's pet tick) is ever skipped - target
+     * invalidated, owner temporarily unresolvable, entity flagged removed - the pet would stand
+     * still forever while the player walks away. This scans the online players once per tick and
+     * rebuilds the missing path. It never touches a pet that already has a route, so it cannot
+     * fight the combat dispatcher.
+     */
+    public void maintainPassiveFollow() {
+        SuperCowMod mod = SuperCowMod.getInstance();
+        if (mod == null) {
+            return;
+        }
+        SuperCowConfig cfg = mod.getConfig();
+        MinecraftServer server = SuperCowMod.getServer();
+        if (cfg == null || server == null) {
+            return;
+        }
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            if (player == null || !player.isAlive()) {
+                continue;
+            }
+            UUID ownerUuid = player.getUUID();
+            PetData data = mod.getPetData(ownerUuid);
+            if (data == null || !data.isAlive) {
+                continue;
+            }
+            Cow pet = mod.getActivePet(ownerUuid);
+            // A pet that merely stopped moving (previous tick flagged it removed while it was being
+            // re-added, or the teleport glitch below) is still the pet: revive the link instead of
+            // dropping the owner. Only a genuinely dead entity is skipped.
+            if (pet == null) {
+                pet = adoptOrphanPet(mod, player);
+            }
+            if (pet == null || !pet.isAlive()) {
+                continue;
+            }
+            if (pet.level != player.level) {
+                continue;
+            }
+            PetMode mode = getPetMode(ownerUuid);
+            LivingEntity activeTarget = getCurrentTarget(ownerUuid);
+            if (mode != PetMode.PASSIVE && activeTarget != null && activeTarget.isAlive() && !activeTarget.removed) {
+                continue;
+            }
+            // 卡住兜底：牛在长距离跟随/瞬移里偶尔会把自己写进方块里、或者掉到世界底下，
+            // 之后 mover 每一 tick 都撞着方块原地踏步，看起来就是"牛永远不追了"。
+            // 一直动不了、而且离玩家还很远时，直接按安全落点把它挪回玩家身边。
+            if (rescueStuckPet(player, pet, cfg)) {
+                continue;
+            }
+            UUID petId = pet.getUUID();
+            if (pathfindingManager.hasActivePath(petId) || pathfindingManager.isSpiraling(petId)) {
+                continue;
+            }
+            double dx = pet.getX() - player.getX();
+            double dy = Math.abs(pet.getY() - player.getY());
+            double dz = pet.getZ() - player.getZ();
+            double dist = Math.sqrt(dx * dx + dz * dz);
+            double follow = Math.max(2.0D, cfg.followDistance);
+            double startRadius = follow + Math.max(0.0D, cfg.followStartBuffer);
+            if (dist > startRadius || dy > 8.0D) {
+                pathfindingManager.moveToEntity(pet, player, 1.0D, true);
+            }
+        }
+    }
+
+    /** Ticks a pet may spend "wanting to move" without covering ground before it is rescued. */
+    private static final int STUCK_RESCUE_TICKS = 100;
+    private static final double STUCK_MIN_TRAVEL = 0.5D;
+    private static final int PET_LINK_MEMORY_TICKS = 400;
+    private final Map<UUID, Integer> followStuckTicks = new HashMap<>();
+    private final Map<UUID, net.minecraft.world.phys.Vec3> followStuckAnchor = new HashMap<>();
+    /** Pet entities still tagged as this player's, even if the fast map lost them. */
+    private final Map<UUID, UUID> petLinkByOwner = new HashMap<>();
+    private final Map<UUID, Long> petLinkSeenAt = new HashMap<>();
+    /** Cooldown timestamp (ms) before re-scanning nearby chunks after an orphan scan missed. */
+    private final Map<UUID, Long> orphanScanCooldownUntil = new HashMap<>();
+
+    /**
+     * Re-link a player with the pet cow of theirs that is still in the world (tagged
+     * {@code supercow_pet} + {@code supercow_owner:&lt;uuid&gt;}). Used when the cached link in
+     * SuperCowMod went missing but the entity itself is alive - the pet must not be "gone" just
+     * because a tick raced with a re-add.
+     */
+    private Cow adoptOrphanPet(SuperCowMod mod, ServerPlayer player) {
+        UUID ownerUuid = player.getUUID();
+        PetData data = mod.getPetData(ownerUuid);
+        if (data == null || !data.isAlive) {
+            return null;
+        }
+        long now = System.currentTimeMillis();
+        Long cooldownUntil = orphanScanCooldownUntil.get(ownerUuid);
+        if (cooldownUntil != null && now < cooldownUntil.longValue()) {
+            return null;
+        }
+        Long seen = petLinkSeenAt.get(ownerUuid);
+        if (seen != null && now - seen > 500L) {
+            petLinkByOwner.remove(ownerUuid);
+            petLinkSeenAt.remove(ownerUuid);
+        }
+        if (!(player.level instanceof ServerLevel)) {
+            return null;
+        }
+        String ownerTag = "supercow_owner:" + ownerUuid;
+        AABB box = player.getBoundingBox().inflate(96.0D);
+        Cow best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (Cow cow : ((ServerLevel) player.level).getEntitiesOfClass(Cow.class, box)) {
+            if (cow == null || !cow.isAlive() || cow.removed) {
+                continue;
+            }
+            if (!cow.getTags().contains(SuperCowMod.TAG_PET) || !cow.getTags().contains(ownerTag)) {
+                continue;
+            }
+            double d = cow.distanceToSqr(player);
+            if (d < bestDist) {
+                bestDist = d;
+                best = cow;
+            }
+        }
+        if (best != null) {
+            petLinkByOwner.put(ownerUuid, best.getUUID());
+            petLinkSeenAt.put(ownerUuid, now);
+            orphanScanCooldownUntil.remove(ownerUuid);
+            mod.bindPetEntity(ownerUuid, best);
+        } else {
+            orphanScanCooldownUntil.put(ownerUuid, now + 1000L);
+        }
+        return best;
+    }
+
+    /**
+     * Teleport the pet back next to its owner when it has been trying to follow for several seconds
+     * without actually covering any ground (wedged in terrain, void, unloaded chunk). Returns true
+     * when it rescued the pet on this tick.
+     */
+    private boolean rescueStuckPet(ServerPlayer player, Cow pet, SuperCowConfig cfg) {
+        UUID id = pet.getUUID();
+        double dx = pet.getX() - player.getX();
+        double dy = Math.abs(pet.getY() - player.getY());
+        double dz = pet.getZ() - player.getZ();
+        double dist = Math.sqrt(dx * dx + dz * dz);
+        double follow = Math.max(2.0D, cfg.followDistance);
+        double startRadius = follow + Math.max(0.0D, cfg.followStartBuffer);
+        boolean wantsToMove = dist > startRadius || dy > 8.0D;
+        if (!wantsToMove) {
+            followStuckTicks.remove(id);
+            followStuckAnchor.remove(id);
+            return false;
+        }
+        net.minecraft.world.phys.Vec3 anchor = followStuckAnchor.get(id);
+        if (anchor == null || anchor.distanceTo(pet.position()) > STUCK_MIN_TRAVEL) {
+            followStuckAnchor.put(id, pet.position());
+            followStuckTicks.put(id, 0);
+            return false;
+        }
+        int ticks = followStuckTicks.getOrDefault(id, 0) + 1;
+        followStuckTicks.put(id, ticks);
+        if (ticks < STUCK_RESCUE_TICKS) {
+            return false;
+        }
+        followStuckTicks.remove(id);
+        followStuckAnchor.remove(id);
+        pathfindingManager.stopPathfinding(pet);
+        double tx = player.getX() + 1.5D;
+        double ty = player.getY();
+        double tz = player.getZ() + 1.5D;
+        if (player.level instanceof ServerLevel) {
+            double groundY = SuperCowMod.groundBelow((ServerLevel) player.level, tx, ty + 2.0D, tz);
+            if (!Double.isNaN(groundY)) {
+                ty = groundY;
+            }
+        }
+        pet.teleportTo(tx, ty, tz);
+        pet.setDeltaMovement(0.0D, 0.0D, 0.0D);
+        player.sendMessage(new TextComponent("\u00A7e[\u8D85\u7EA7\u725B] \u4F60\u7684\u725B\u5361\u4F4F\u4E86\uFF0C\u5DF2\u628A\u5B83\u62C9\u56DE\u8EAB\u8FB9\u3002"), player.getUUID());
+        return true;
     }
 
     private void performCombatAction(
@@ -396,24 +635,39 @@ public class CombatManager {
     // skipped, so a switched-off skill can never be drawn.
     private String rollWeightedSkill(boolean rage) {
         SuperCowConfig cfg = mod.getConfig();
-        java.util.List<Skills.Skill> pool = new java.util.ArrayList<>();
+        // Rebuilt in place instead of allocating a fresh ArrayList per attack. Skills.all() is an
+        // unmodifiable view whose contents can change when the owner toggles a skill, so the
+        // candidate list is refreshed whenever the table identity changes, and the enabled flags
+        // are re-checked every roll (that is a cheap array read, unlike the list copy).
+        java.util.List<Skills.Skill> all = Skills.all();
+        if (rollScratchState != all || rollScratchAll.length != all.size()) {
+            rollScratchAll = new Skills.Skill[all.size()];
+            for (int i = 0; i < rollScratchAll.length; i++) {
+                rollScratchAll[i] = all.get(i);
+            }
+            rollScratchState = all;
+        }
+        Skills.Skill[] pool = rage ? rollPoolRage : rollPoolNormal;
+        int size = 0;
         int total = 0;
-        for (Skills.Skill skill : Skills.all()) {
-            if (!skill.rollable || !cfg.isSkillEnabled(skill.id)) {
+        for (int i = 0; i < rollScratchAll.length; i++) {
+            Skills.Skill skill = rollScratchAll[i];
+            if (skill == null || !skill.rollable || !cfg.isSkillEnabled(skill.id)) {
                 continue;
             }
             int w = rage ? skill.weightRage : skill.weightNormal;
             if (w <= 0) {
                 continue;
             }
-            pool.add(skill);
+            pool[size++] = skill;
             total += w;
         }
         if (total <= 0) {
             return "arrow";
         }
         int roll = random.nextInt(total);
-        for (Skills.Skill skill : pool) {
+        for (int i = 0; i < size; i++) {
+            Skills.Skill skill = pool[i];
             int w = rage ? skill.weightRage : skill.weightNormal;
             if (roll < w) {
                 return skill.id;
@@ -423,17 +677,20 @@ public class CombatManager {
         return "arrow";
     }
 
+    private static final String[] POOL_CLOSE = {"music", "potion", "summon", "arrow"};
+    private static final String[] POOL_MEDIUM = {"arrow", "fireball", "potion", "music", "summon"};
+    private static final String[] POOL_FAR = {"arrow", "firework", "chicken", "exploding_cow"};
+
     private String chooseSpecialAttackByDistance(double dist, SuperCowConfig cfg) {
+        String[] pool;
         if (dist <= cfg.closeRangeDistance) {
-            String[] pool = new String[]{"music", "potion", "summon", "arrow"};
-            return pool[random.nextInt(pool.length)];
+            pool = POOL_CLOSE;
         } else if (dist <= cfg.mediumRangeDistance) {
-            String[] pool = new String[]{"arrow", "fireball", "potion", "music", "summon"};
-            return pool[random.nextInt(pool.length)];
+            pool = POOL_MEDIUM;
         } else {
-            String[] pool = new String[]{"arrow", "firework", "chicken", "exploding_cow"};
-            return pool[random.nextInt(pool.length)];
+            pool = POOL_FAR;
         }
+        return pool[random.nextInt(pool.length)];
     }
 
     public boolean executeNamedAttack(
@@ -598,11 +855,24 @@ public class CombatManager {
 
     /** Periodic bookkeeping: drop targets whose pet or victim disappeared. */
     public void tick() {
-        for (UUID ownerUuid : new java.util.ArrayList<>(currentTargets.keySet())) {
-            LivingEntity target = currentTargets.get(ownerUuid);
-            Cow pet = mod.getActivePet(ownerUuid);
+        // Iterator instead of a defensive ArrayList copy: this runs on every server tick.
+        Iterator<Map.Entry<UUID, LivingEntity>> it = currentTargets.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<UUID, LivingEntity> entry = it.next();
+            LivingEntity target = entry.getValue();
+            Cow pet = mod.getActivePet(entry.getKey());
             if (target == null || !target.isAlive() || target.removed || pet == null || !pet.isAlive()) {
-                clearTarget(ownerUuid);
+                if (target != null) {
+                    if (target.isAlive()) {
+                        target.setGlowing(false);
+                    }
+                    UUID targetId = target.getUUID();
+                    targetTickSnapshots.remove(targetId);
+                    targetStuckSinceTick.remove(targetId);
+                    untickableTargets.remove(targetId);
+                    untickableSnapshots.remove(targetId);
+                }
+                it.remove();
             }
         }
     }

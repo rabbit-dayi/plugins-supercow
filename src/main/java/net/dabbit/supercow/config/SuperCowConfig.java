@@ -45,18 +45,32 @@ public class SuperCowConfig {
     public double mediumRange = 8.0;
     public double farRange = 14.0;
     public double maxTargetDistance = 16.0;
-    public double teleportToOwnerDistance = 24.0;
+    public double teleportToOwnerDistance = 32.0;
 
     // Combat orchestration (conservative)
     public double closeRangeDistance = 3.0; // melee distance
     public double mediumRangeDistance = 9.0; // special-attack mid band
-    // 跟随站位：牛停在离主人这个距离的地方。原来是 4 格，贴得太近——牛走路时的蹄声
-    // 会一直在耳边响。默认改成 10 格（"远"档），近/远可以随时调。
-    public double followDistance = 10.0;
-    public double followStopDistance = 1.5; // 进入这个距离就不再往前挤（防止原地抖腿）
-    public double followStartBuffer = 1.5;   // 刚好卡在 followDistance 上时的手抖不触发移动
+    // 跟随站位：牛停在离主人这个距离的地方。原来 4 格贴得太近，牛走路时的蹄声会一直在耳边响；
+    // 先试过 10 格，还是吵，默认改成 20 格（"远"档），可用 /supercow follow <2-24> 或面板第 7 格调。
+    // 注意：这是"站位半径"，不是"触发移动的阈值"——多出来的余量由 followStartBuffer 控制，
+    // 牛只在明显走出去之后才起步，走到 followDistance 附近就减速停下（见 PathfindingManager）。
+    public double followDistance = 20.0;
+    // 跟随的起步判定发生在"最优距离 + buffer"之外：默认 20 + 4 = 24 格起步追赶，超过 32 格再瞬移。
+    public double followStartBuffer = 4.0;
+    // 跟随减速带：离主人 followDistance*followChaseBand 以外全速，进入 followDistance 以内
+    // （也就是最后 followBrakeDistance 格）平滑减速到停，牛就停在 followDistance 处。
+    // 纯软件减速，不依赖 legacyOptimalDistance，所以任何跟随距离（2~24）都不用改这里。
+    public double followChaseBand = 1.25;
+    public double followBrakeDistance = 3.0;
+    // 跟随时的移动倍率（PathfindingManager 里还会夹在 [0.35,1.5]）
+    public double followMoveSpeed = 1.2;
+    // 停止半径的下限（牛最多贴到 followDistance - followStopDistance 那么近，默认 20-1.5=18.5），
+    // 主要作为 CombatManager 与面板显示的兜底语义：真正让牛停下的仍然是 followDistance 本身。
+    public double followStopDistance = 1.5;
+    // 兼容字段：1.5 / 10.0 时代的手工微调值，已不再参与任何计算（保留以免老配置文件反序列化失败）。
+    public double followStopDistanceLegacy;
     public boolean petAmbientSoundEnabled = false; // 牛自己的哞哞声默认关掉，打架时太吵
-    public double teleportDistance = 24.0;
+    public double teleportDistance = 32.0;
     public double detectionRange = 10.0; // AGGRESSIVE auto-acquire
     public double protectRange = 6.0; // PROTECTING auto-acquire
     public int rageAttackCooldownTicks = 25; // 1.25s
@@ -193,6 +207,7 @@ public class SuperCowConfig {
     public boolean legacyStrafeOnlyInCombat = true;
     public double legacyTravelSpeed = 0.3;       // 非战斗行进的基准速度（比战斗冲刺慢一点，看着正常）
     public double legacyJumpPower = 0.42;
+    // 只用于"战斗追击"：追怪时的最优交战半径（跟随主人不再使用这个值，见 followDistance）。
     public double legacyOptimalDistance = 8.0;
     public double legacyFollowStopDistance = 2.0;
 
@@ -230,11 +245,19 @@ public class SuperCowConfig {
     public double confettiDamage = 0.5;
     public int quirkSkillDurationTicks = 80;     // 这批抽象技能的持续时间（4 秒）
 
+    /** Schema version so one-shot default migrations never overwrite user-chosen values on reload. */
+    public int configVersion = 0;
+    public static final int CURRENT_CONFIG_VERSION = 2;
+
     public static SuperCowConfig load(File file) {
         if (file.exists()) {
             try (FileReader reader = new FileReader(file)) {
                 SuperCowConfig loaded = GSON.fromJson(reader, SuperCowConfig.class);
                 if (loaded != null) {
+                    boolean migrated = loaded.repairFollowDefaults();
+                    if (migrated) {
+                        loaded.save(file);
+                    }
                     return loaded;
                 }
             } catch (Exception e) {
@@ -242,8 +265,56 @@ public class SuperCowConfig {
             }
         }
         SuperCowConfig config = new SuperCowConfig();
+        config.configVersion = CURRENT_CONFIG_VERSION;
         config.save(file);
         return config;
+    }
+
+    /**
+     * 老版本写出来的配置文件里 followDistance 是 4 或 10（当时觉得"够远了"，现在觉得吵），
+     * buffer 也还是旧的 1.5。通过 configVersion 做一次性升级迁移并写回，之后用户再用
+     * /supercow follow 4 或 10 设置的值在 reload/restart 时不会被覆盖。
+     */
+    public boolean repairFollowDefaults() {
+        boolean migrated = false;
+        if (configVersion < CURRENT_CONFIG_VERSION) {
+            if (Math.abs(followDistance - 4.0D) < 1.0E-6D || Math.abs(followDistance - 10.0D) < 1.0E-6D) {
+                followDistance = 20.0D;
+            }
+            if (Math.abs(followStartBuffer - 1.5D) < 1.0E-6D) {
+                followStartBuffer = 4.0D;
+            }
+            if (Math.abs(teleportDistance - 24.0D) < 1.0E-6D) {
+                teleportDistance = 32.0D;
+            }
+            if (Math.abs(teleportToOwnerDistance - 24.0D) < 1.0E-6D) {
+                teleportToOwnerDistance = 32.0D;
+            }
+            configVersion = CURRENT_CONFIG_VERSION;
+            migrated = true;
+        }
+        if (followDistance < 2.0D) {
+            followDistance = 2.0D;
+        } else if (followDistance > 24.0D) {
+            followDistance = 24.0D;
+        }
+        if (followChaseBand < 1.2D) {
+            followChaseBand = 1.25D;
+        }
+        if (followBrakeDistance <= 0.0D) {
+            followBrakeDistance = 3.0D;
+        }
+        if (followMoveSpeed <= 0.0D) {
+            followMoveSpeed = 1.2D;
+        }
+        double minTeleport = followDistance + Math.max(0.0D, followStartBuffer) + 8.0D;
+        if (teleportDistance < minTeleport) {
+            teleportDistance = Math.max(32.0D, minTeleport);
+        }
+        if (teleportToOwnerDistance < minTeleport) {
+            teleportToOwnerDistance = Math.max(32.0D, minTeleport);
+        }
+        return migrated;
     }
 
     /** 技能是否启用（缺省全部启用；sky_spiral 走自己的开关） */
