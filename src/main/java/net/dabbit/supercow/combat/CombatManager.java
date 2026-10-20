@@ -78,7 +78,7 @@ public class CombatManager {
 
     private final Map<UUID, PetMode> petModes = new HashMap<>();
     private final Map<UUID, LivingEntity> currentTargets = new HashMap<>();
-    private final Map<UUID, Long> lastAttackTick = new HashMap<>();
+    private final Map<UUID, Long> nextAttackTick = new HashMap<>();
     private final Map<UUID, Long> lastSpecialAttackTick = new HashMap<>();
     // Guard against targets that stopped ticking (e.g. entities frozen by another mod):
     // such entities never decrement invulnerableTime, so every hurt() call silently fails
@@ -112,10 +112,9 @@ public class CombatManager {
     }
 
     public int getAttackCooldownRemainingTicks(UUID ownerUuid) {
-        Long last = lastAttackTick.get(ownerUuid);
-        if (last == null) return 0;
-        long remaining = attackCooldownTicks(isInRageMode(ownerUuid), mod.getConfig())
-            - (mod.getServerTicks() - last);
+        Long next = nextAttackTick.get(ownerUuid);
+        if (next == null) return 0;
+        long remaining = next - mod.getServerTicks();
         return (int) Math.max(0L, Math.min(Integer.MAX_VALUE, remaining));
     }
 
@@ -129,6 +128,19 @@ public class CombatManager {
     private static int attackCooldownTicks(boolean rage, SuperCowConfig cfg) {
         // Vanilla rejects equal/lower damage while invulnerableTime > 10. Never reset that timer.
         return Math.max(11, rage ? cfg.rageAttackCooldownTicks : cfg.attackCooldownTicks);
+    }
+
+    public static boolean isBossTarget(LivingEntity target, SuperCowConfig cfg) {
+        return CombatBalance.isBoss(target, cfg);
+    }
+
+    private int sampleAttackIntervalTicks(boolean rage, LivingEntity target, SuperCowConfig cfg) {
+        int jitter = Math.max(0, Math.min(20, cfg.attackIntervalJitterTicks));
+        double base = attackCooldownTicks(rage, cfg);
+        if (isBossTarget(target, cfg)) base *= Math.max(1.0D, cfg.bossAttackIntervalMultiplier);
+        int sampled = (int) Math.ceil(base) + (jitter == 0 ? 0 : random.nextInt(jitter * 2 + 1) - jitter);
+        // Combat dispatch runs every two ticks: store the real even interval for truthful GUI.
+        return ((Math.max(12, sampled) + 1) / 2) * 2;
     }
 
     private static String canonicalSkillId(String skillId) {
@@ -372,16 +384,14 @@ public class CombatManager {
             pathfindingManager.stopPathfinding(pet);
         }
 
-        int cooldown = attackCooldownTicks(rage, cfg);
-        long lastAtk = lastAttackTick.getOrDefault(ownerUuid, nowTick - cooldown);
-        if ((nowTick - lastAtk) < cooldown) {
+        if (nowTick < nextAttackTick.getOrDefault(ownerUuid, nowTick)) {
             return;
         }
         // A recent hit from the owner/another mob must not consume a whole melee cooldown.
         if (dist <= cfg.closeRangeDistance + 0.5D && target.invulnerableTime > 10) {
             return;
         }
-        lastAttackTick.put(ownerUuid, nowTick);
+        nextAttackTick.put(ownerUuid, nowTick + sampleAttackIntervalTicks(rage, target, cfg));
 
         performCombatAction(level, ownerUuid, pet, owner, target, data, dist, rage, nowTick, cfg);
     }
@@ -690,8 +700,12 @@ public class CombatManager {
         SuperCowConfig cfg
     ) {
         long lastSpecial = lastSpecialAttackTick.getOrDefault(ownerUuid, -9999L);
-        boolean canSpecial = (nowTick - lastSpecial) >= cfg.specialAttackCooldownTicks;
+        boolean boss = isBossTarget(target, cfg);
+        int specialCooldown = boss ? cfg.bossSpecialAttackCooldownTicks : cfg.specialAttackCooldownTicks;
+        boolean canSpecial = (nowTick - lastSpecial) >= Math.max(40, specialCooldown);
         double specialProb = rage ? cfg.rageSpecialAttackChance : cfg.specialAttackChance;
+        if (boss) specialProb = Math.max(specialProb, cfg.bossSpecialAttackChance);
+        specialProb = Math.max(0.0D, Math.min(1.0D, specialProb));
 
         if (canSpecial && random.nextDouble() < specialProb) {
             String chosen = cfg.legacySkillsEnabled ? rollWeightedSkill(rage) : chooseSpecialAttackByDistance(dist, cfg);
@@ -895,7 +909,8 @@ public class CombatManager {
             double dz = target.getZ() - pet.getZ();
             double len = Math.sqrt(dx * dx + dz * dz);
             if (len > 1.0E-4D) {
-                target.push((dx / len) * 0.12D, 0.05D, (dz / len) * 0.12D);
+                double knockback = Math.max(0.0D, Math.min(1.0D, cfg.extraKnockbackMultiplier));
+                target.push((dx / len) * 0.12D * knockback, 0.05D * knockback, (dz / len) * 0.12D * knockback);
             }
             if (isCrit) {
                 level.sendParticles(ParticleTypes.CRIT, target.getX(), target.getY() + target.getBbHeight() * 0.5D, target.getZ(), 8, 0.25D, 0.25D, 0.25D, 0.1D);
@@ -913,7 +928,7 @@ public class CombatManager {
      */
     public void onPetRemovedOrDied(UUID ownerUuid, Cow pet) {
         clearTarget(ownerUuid);
-        lastAttackTick.remove(ownerUuid);
+        nextAttackTick.remove(ownerUuid);
         lastSpecialAttackTick.remove(ownerUuid);
         currentSkillIds.remove(ownerUuid);
         currentSkillEndTick.remove(ownerUuid);
@@ -992,7 +1007,7 @@ public class CombatManager {
             clearTarget(ownerUuid);
         }
         currentTargets.clear();
-        lastAttackTick.clear();
+        nextAttackTick.clear();
         lastSpecialAttackTick.clear();
         currentSkillIds.clear();
         currentSkillEndTick.clear();

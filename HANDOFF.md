@@ -112,3 +112,30 @@
 - 正式服已平滑更新并启动：/opt/hf/final-paradox-1.16.5，tmux16:0.0，生产PID372073，25565监听，18:37:31 Done(2.331s)，加载supercow1.0.2。备份 /opt/hf/final-paradox-1.16.5/backups/supercow-pre-1.0.2-20261019-183711/ 含旧1.0.1 JAR和原配置；新JAR与测试一致SHA256 9d609fecd85ca40b92ca41f482c65d3837e9bc30a1fe747131674bccf0135509。schema4迁移旧默认，保留生产自选followDistance=3。
 - 原测试世界补测四页已通过 /tmp/sc-102-default-pages.log GUI_PAGES_PASS（27/27/27/11），覆盖§6中此前未通过的额外分页项。原世界仍有区块/窒息等独立异常，不将其宣称为存档修复。
 - 发布tag 1.0.2-1.16.5，GitHub Release附二进制与sources；发布结果以GitHub及 /tmp/sc-publish-1.0.2.log 为准。回滚：平滑stop后将当前1.0.2 JAR移出mods，恢复备份1.0.1 JAR及config，再./start.sh；不要让两个supercow JAR同时留在mods。
+
+## 8. 未发布：直接伤害/击退平衡 + 25个抽象技能（2026-10-20）
+
+- 用户要求：以生产1.0.2为基准，攻击伤害与击退减少80%，稍增并随机化攻击间隔、增强暴击与技能频率，对最大生命值>400的Boss保守普攻但更常放技能；追加25个抽象技能。当前只在25566测试，未授权本轮生产部署/提交/Release；代码尚未提交，mod_version仍1.0.2，勿与正式1.0.2二进制混淆。
+- 新增 combat/CombatBalance.java：只根据当前DamageSource的真实攻击实体/直接实体及其主人标记判定宠物攻击，绝不从受害者recordDamageOwner历史推断来源；玩家攻击直接排除。LivingEntityMixin.hurt入口只乘一次outgoingDamageMultiplier=.2，Boss再乘.75（普通为原20%、Boss为原15%），原生护甲/无敌帧仍照常结算。宠物、召唤物、带归属投射物和脚本直接伤害统一覆盖；两处无归属雷击改成带宠物来源伤害。
+- 注意：旧技能施加的燃烧/毒/凋零后续DOT、后续摔落/环境伤害没有可靠攻击来源，未冒险用过期归属推断；所以不能声称所有技能造成的最终生命损失、所有环境伤害或总体DPS精确减少80%。本轮减伤保证针对可归属的直接攻击伤害。现有真实爆炸/环境副效应未全面重做。
+- 击退：LivingEntityMixin重定向本次hurt内原生knockback并按当前来源缩放；近战额外push*.2，QuirkSkills/SpecialAttackManagers的受害者push和setVelocity走CombatBalance。setVelocity按old+(desired-old)*.2缩放新增速度变化，而非把已有速度硬归零；宠物/装饰实体自身轨迹不缩放。
+- schema5默认：普通攻击18 tick ±4 tick，狂暴16 ±4；每次出手只采样一次，按实际2tick战斗调度向上取偶数，最低12tick。普通实际范围0.7–1.1秒，狂暴0.6–1.0秒；Boss间隔基数×1.35（普通约1.1–1.5秒）。nextAttackTick给GUI显示真实剩余冷却。近战暴击25%，倍率1.5；暴击后仍过统一减伤。
+- 技能机会（达到技能CD后按攻击轮次判定，不是每tick）：普通24%、狂暴36%，CD80tick；Boss至少50%，CD60tick。Boss按最大生命值严格>400判断，不会掉血至400以下就丢失Boss策略。成功技能取代该轮普通攻击，失败回落普攻，不增加每次召唤实体数。
+- 配置迁移只把旧默认值迁移为新默认，已有自定义值保持；schema2/3/4迁移、schema5幂等与自定义伤害/跟随/概率保留检查：/tmp/CombatBalanceMigrationCheck.java，运行结果BALANCE_MIGRATION_PASS。
+- 新增 combat/AbsurdSkills.java：25套不同投影轨迹+推/拉/轻抬/减速/虚弱组合；全部用物品头盔投影、粒子和轻量脚本实现，不是真载具、真方块装置或新版本原生紫晶。每次最多3个隐形Marker盔甲架，锁装备、无碰撞、无重力、无敌、静音、supercow_quirk_actor标记及SkillCleanup TTL；每主人最多4任务、新引擎全局最多48任务（不代表旧引擎也有相同全局上限）。每任务最多80tick，3次伤害脉冲，每脉冲最多8个合法非玩家目标；无新增燃烧/中毒DOT。离线、跨维度、宠物失效、区块不可用或任务异常均回收。
+- 技能总数92→117，5页27/27/27/27/9，全部有简介并自动加入动态命令和技能权重；QuirkSkills路由/tick/清理/activeTasks均接入新引擎。
+- 新技能：史莱姆弹簧床 (slime_trampoline)、磁铁牛奶 (magnet_milk)、红石迪斯科 (redstone_disco)、纸飞机快递 (paper_airplane)、芝士陨石 (cheese_meteor)、雨伞大风车 (umbrella_spin)、发条胡萝卜 (clockwork_carrot)、发射器爆米花 (dispenser_popcorn)、橡皮鸭舰队 (rubber_duck_fleet)、豆腐切切机 (tofu_guillotine)、重力悠悠球 (gravity_yo_yo)、奶茶龙卷风 (milk_tea_tornado)、钟声节拍器 (bell_metronome)、南瓜保龄球 (pumpkin_bowling)、面包飞盘 (bread_frisbee)、钓一轮月亮 (fishing_moon)、书架多米诺 (bookshelf_domino)、土豆卫星 (potato_satellite)、地毯魔术秀 (carpet_magic_show)、西瓜投石机 (watermelon_catapult)、灯笼水母 (lantern_jellyfish)、漏斗吸尘器 (hopper_vacuum)、蛋糕传送带 (cake_conveyor)、紫晶交响乐 (amethyst_orchestra)、袜子黑洞 (sock_black_hole)。
+- 完整构建 /tmp/sc-wave4-build2.log BUILD SUCCESSFUL（Java tests NO-SOURCE）；测试服 /tmp/sc-wave4-server.log启动Done3.105s，无新增Mixin启动异常。构建/测试jar SHA256 7d92947a2db326976c22cc75b39bc43a52a0966102a37bf8e884347af687928a；生产jar仍9d609fecd85ca40b92ca41f482c65d3837e9bc30a1fe747131674bccf0135509。
+- /tmp/sc-wave4-smoke.log：WAVE4_SMOKE_PASS，25次均有实际伤害（200HP护甲husk剩199.4456–199.5569），117条JSON简介、五页与过期实体0通过；/tmp/sc-wave4-cap.log CAP_PASS四次成功/12实体，LOGOUT_CLEANUP_PASS。首次断线断言失败是临时脚本正则\s转义丢失，不是实测实体残留，修正后重测通过。
+- /tmp/sc-wave4-balance.log BALANCE_SMOKE_PASS：基础10对400maxHP目标变2，401maxHP目标变1.5（当前血量掉至400以下仍保持Boss倍率），强制暴击3；普通间隔699–1000ms、Boss1099–1500ms。/tmp/sc-balance-guard3.log SOURCE_GUARD_PASS：相同静止目标首次水平速度包4160→831（约19.976%），垂直400→80；玩家自己空手攻击仍伤害1，未被减伤。早期控制脚本按旧协议读velocityX失败，修正为velocity.x后通过。
+- /tmp/sc-wave4-ui.log UI_COMBAT_SMOKE_PASS：三连右键/双包去重、超时、Lore、头顶最近技能及恢复、五页117条、远程保持打开与关闭按钮通过；普攻夹杂箭效果的UI样本不用于纯攻击间隔统计。
+- 可复现脚本：scripts/balance-smoke.js、scripts/balance-guard-smoke.js、scripts/balance-skill-smoke.js、scripts/wave4-smoke.js、scripts/wave4-cap-smoke.js；均仅用于隔离测试服，需SC_TEST_MUTATIONS=1、OP、既有宠物与平坦测试地板，会改库存/模式/竞技场/配置，须外部备份恢复。不要运行在生产世界。
+- 技能频率完整构建重测 /tmp/sc-wave4-frequency.log BALANCE_SKILL_PASS：仅moo_wave可抽的隔离池，强制概率1时普通14秒3次（间隔4.5/4.8秒）、Boss14秒4次（约3.5–3.7秒）；默认概率样本普通30秒4次、Boss30秒6次，只是短期样本，不宣称证明长期概率或总体DPS。/tmp/sc-wave4-regressions2.log ALL_REGRESSIONS_PASS。
+- 测试properties/config原备份 /tmp/sc-balance-original.properties、/tmp/sc-balance-original-config.json；回归后恢复原world/default，再加载测试构建并迁移schema5默认。恢复日志 /tmp/sc-wave4-restored-server.log，启动结果以该日志及后续核验为准。生产/GH仍未变更。
+- 恢复核验完成：/tmp/sc-wave4-restored-server.log 10:59:47 Done(1.931s)，25566监听、PID1817238；level-name=world、level-type=default。原配置逐字段比较无非预期变化，仅schema5指定默认迁移与8个新平衡字段，临时baseDamage=10/critChance=1/禁用所有技能等均不残留。原自定义跟随距离、技能开关保留。回归与重启后台进程均已结束；生产artifact仍为正式1.0.2，未重启生产。
+
+## 9. 1.0.3 正式发布（2026-10-20）
+- 用户已授权生产部署与发布；版本号递增1.0.3。离线构建 /tmp/sc-103-build.log BUILD SUCCESSFUL；/tmp/sc-103-compare.py核验93个class与此前完整实测构建逐字节相同，仅版本元数据变化。正式JAR SHA256 6e9ef7c108efbf2b79f22a756a137c1fef3de2e011d37e7b342efbfbb20b5b73。
+- 生产部署脚本 /tmp/sc-deploy-1.0.3.sh，日志 /tmp/sc-deploy-1.0.3.log；先公告、save-all flush、stop，等tmux16:0.0返回bash，再备份旧JAR与配置、替换并./start.sh。实际备份路径/启动结论见后续核验记录。
+- Release计划tag1.0.3-1.16.5，保留旧标签；上传binary与sources，说明直接减伤与后续DOT/环境伤害的边界。正式发布结果以GitHub及后续核验为准，§8的未发布状态为本节前的历史。
+- 生产核验完成：/opt/hf/final-paradox-1.16.5，PID1844642，25565监听，latest.log确认supercow1.0.3，11:18:15 Done(4.209s)。备份 /opt/hf/final-paradox-1.16.5/backups/supercow-pre-1.0.3-20261020-111747/ 含正式1.0.2 JAR与更新前配置，并保留1.0.3发布JAR。生产与发布构建SHA256相同。schema5按预期迁移，followDistance=3自定义保留；回滚应平滑stop，移出1.0.3 JAR，恢复备份1.0.2及原配置，再./start.sh，不能同时放两个supercow JAR。

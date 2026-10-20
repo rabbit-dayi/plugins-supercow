@@ -210,7 +210,7 @@ public final class SpecialAttackManagers {
             }
             case LIGHTNING: {
                 float boltDmg = (float) (rageMode ? cfg.rageLightningDamage : cfg.lightningDamage);
-                primaryTarget.hurt(DamageSource.LIGHTNING_BOLT, boltDmg);
+                primaryTarget.hurt(source, boltDmg);
                 // Visual-only lightning bolt so it never starts fires or turns pigs/villagers into witches
                 LightningBolt bolt = EntityType.LIGHTNING_BOLT.create(level);
                 if (bolt != null) {
@@ -315,7 +315,7 @@ public final class SpecialAttackManagers {
                 Vec3 pull = hitPos.subtract(entity.position());
                 if (pull.lengthSqr() > 1.0E-4D) {
                     Vec3 v = pull.normalize().scale(cfg.vortexPullStrength);
-                    entity.setDeltaMovement(entity.getDeltaMovement().add(v.x, 0.08D, v.z));
+                    CombatBalance.setVelocity(entity, entity.getDeltaMovement().add(v.x, 0.08D, v.z));
                 }
                 entity.hurt(source, (float) cfg.vortexDamage);
             }
@@ -660,7 +660,7 @@ public final class SpecialAttackManagers {
                         Vec3 away = entity.position().subtract(shooterCow.position());
                         if (away.lengthSqr() > 1.0E-4D) {
                             Vec3 kb = away.normalize().scale(cfg.musicKnockback);
-                            entity.setDeltaMovement(entity.getDeltaMovement().add(kb.x, 0.1D, kb.z));
+                            CombatBalance.setVelocity(entity, entity.getDeltaMovement().add(kb.x, 0.1D, kb.z));
                         }
                     }
                 }
@@ -772,7 +772,7 @@ public final class SpecialAttackManagers {
                     Vec3 away = entity.position().subtract(pos);
                     if (away.lengthSqr() > 1.0E-4D) {
                         Vec3 kb = away.normalize().scale(cfg.explodingCowKnockback * factor);
-                        entity.setDeltaMovement(entity.getDeltaMovement().add(kb.x, 0.2D * factor, kb.z));
+                        CombatBalance.setVelocity(entity, entity.getDeltaMovement().add(kb.x, 0.2D * factor, kb.z));
                     }
                 }
             }

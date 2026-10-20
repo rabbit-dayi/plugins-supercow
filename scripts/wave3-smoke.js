@@ -1,5 +1,5 @@
 // TEST SERVER ONLY. Requires mineflayer@4 and an existing OP player with a SuperCow.
-// Exercises 92 GUI intros, 30 forced casts and automatic entity cleanup.
+// Exercises 117 GUI intros, 30 forced casts and automatic entity cleanup.
 // Run: NODE_PATH=/tmp/bot/node_modules node scripts/wave3-smoke.js
 const mineflayer = require('mineflayer');
 const assert = require('assert');
@@ -18,14 +18,14 @@ bot.once('spawn', async()=>{try{
  await command('/supercow mode passive');
  await command('/supercow quirk safe');
  let guiCount=0;
- for(let page=1;page<=4;page++){
+ for(let page=1;page<=5;page++){
    const w=await readWindow(page);await sleep(200);
    const slots=w.slots.slice(9,36).filter(s=>s && (s.name==='lime_dye'||s.name==='gray_dye'));
    for(const item of slots) assert(JSON.stringify(item.nbt).includes('▸'), 'Missing intro in GUI');
    guiCount+=slots.length;console.log('GUI_PAGE',page,'SKILLS',slots.length);
    bot.closeWindow(w);await sleep(300);
  }
- assert.equal(guiCount,92);
+ assert.equal(guiCount,117);
  let successes=0;
  for(const id of ids){
    await command('/kill @e[tag=wave3_test_target]');
@@ -40,7 +40,7 @@ bot.once('spawn', async()=>{try{
  const start=messages.length;
  await command('/supercow skills',700);
  assert(messages.slice(start).some(m=>/活动技能实体：\s*0\s/.test(m)), 'Actors did not clean up');
- console.log('SMOKE_PASS',JSON.stringify({skills:guiCount,casts:successes,pages:4}));
+ console.log('SMOKE_PASS',JSON.stringify({skills:guiCount,casts:successes,pages:5}));
  bot.quit();setTimeout(()=>process.exit(0),300);
 }catch(e){console.error('SMOKE_FAIL',e.stack);bot.quit();setTimeout(()=>process.exit(1),300)}});
 setTimeout(()=>{console.error('SMOKE_FAIL hard timeout');process.exit(1)},150000);

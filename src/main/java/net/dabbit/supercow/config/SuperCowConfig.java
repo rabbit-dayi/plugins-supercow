@@ -37,10 +37,19 @@ public class SuperCowConfig {
     public int expPerLevelStep = 60;
 
     // Combat core (conservative)
-    public int attackCooldownTicks = 14; // 0.7s; lighter, more responsive attacks
-    public int specialAttackCooldownTicks = 120; // 6.0s
-    public double specialAttackChance = 0.055; // Faster basic cadence must not spam special entities
-    public double rageSpecialAttackChance = 0.12; // Keep special casts per second near the old rate
+    public int attackCooldownTicks = 18; // 0.9s baseline, sampled once per attack with jitter
+    public int specialAttackCooldownTicks = 80; // 4.0s minimum between successful skills
+    public double specialAttackChance = 0.24; // More skill opportunities, still gated by cooldown
+    public double rageSpecialAttackChance = 0.36; // Rage favors skills without changing summon counts
+    // Balance layer: applied exactly once to pet-owned damage, not player damage.
+    public double outgoingDamageMultiplier = 0.2;
+    public double extraKnockbackMultiplier = 0.2;
+    public int attackIntervalJitterTicks = 4;
+    public double bossMaxHealthThreshold = 400.0; // strict >, uses maximum health
+    public double bossDamageMultiplier = 0.75;
+    public double bossAttackIntervalMultiplier = 1.35;
+    public double bossSpecialAttackChance = 0.50;
+    public int bossSpecialAttackCooldownTicks = 60;
     public double closeRange = 4.0;
     public double mediumRange = 8.0;
     public double farRange = 14.0;
@@ -73,8 +82,8 @@ public class SuperCowConfig {
     public double teleportDistance = 32.0;
     public double detectionRange = 10.0; // AGGRESSIVE auto-acquire
     public double protectRange = 6.0; // PROTECTING auto-acquire
-    public int rageAttackCooldownTicks = 12; // 0.6s; above vanilla hurt immunity window
-    public double critChance = 0.15;
+    public int rageAttackCooldownTicks = 16; // 0.8s baseline, above vanilla immunity window
+    public double critChance = 0.25;
     public double critMultiplier = 1.5;
     public int expPerKill = 10;
 
@@ -247,7 +256,7 @@ public class SuperCowConfig {
 
     /** Schema version so one-shot default migrations never overwrite user-chosen values on reload. */
     public int configVersion = 0;
-    public static final int CURRENT_CONFIG_VERSION = 4;
+    public static final int CURRENT_CONFIG_VERSION = 5;
 
     public static SuperCowConfig load(File file) {
         if (file.exists()) {
@@ -323,15 +332,23 @@ public class SuperCowConfig {
         if (configVersion >= CURRENT_CONFIG_VERSION) {
             return false;
         }
-        boolean legacy = configVersion < 3;
-        if (attackCooldownTicks == (legacy ? 40 : 24)) attackCooldownTicks = 14;
-        if (rageAttackCooldownTicks == (legacy ? 25 : 16)) rageAttackCooldownTicks = 12;
-        if (Double.compare(baseDamage, legacy ? 3.0D : 2.0D) == 0) baseDamage = 1.2D;
-        if (Double.compare(damagePerLevel, legacy ? 0.3D : 0.2D) == 0) damagePerLevel = 0.12D;
-        if (Double.compare(normalArrowDamage, legacy ? 2.5D : 1.75D) == 0) normalArrowDamage = 1.0D;
-        if (Double.compare(rageArrowDamage, legacy ? 3.5D : 2.5D) == 0) rageArrowDamage = 1.5D;
-        if (Double.compare(specialAttackChance, legacy ? 0.15D : 0.09D) == 0) specialAttackChance = 0.055D;
-        if (Double.compare(rageSpecialAttackChance, legacy ? 0.25D : 0.16D) == 0) rageSpecialAttackChance = 0.12D;
+        if (configVersion < 4) {
+            boolean legacy = configVersion < 3;
+            if (attackCooldownTicks == (legacy ? 40 : 24)) attackCooldownTicks = 14;
+            if (rageAttackCooldownTicks == (legacy ? 25 : 16)) rageAttackCooldownTicks = 12;
+            if (Double.compare(baseDamage, legacy ? 3.0D : 2.0D) == 0) baseDamage = 1.2D;
+            if (Double.compare(damagePerLevel, legacy ? 0.3D : 0.2D) == 0) damagePerLevel = 0.12D;
+            if (Double.compare(normalArrowDamage, legacy ? 2.5D : 1.75D) == 0) normalArrowDamage = 1.0D;
+            if (Double.compare(rageArrowDamage, legacy ? 3.5D : 2.5D) == 0) rageArrowDamage = 1.5D;
+            if (Double.compare(specialAttackChance, legacy ? 0.15D : 0.09D) == 0) specialAttackChance = 0.055D;
+            if (Double.compare(rageSpecialAttackChance, legacy ? 0.25D : 0.16D) == 0) rageSpecialAttackChance = 0.12D;
+        }
+        if (attackCooldownTicks == 14) attackCooldownTicks = 18;
+        if (rageAttackCooldownTicks == 12) rageAttackCooldownTicks = 16;
+        if (specialAttackCooldownTicks == 120) specialAttackCooldownTicks = 80;
+        if (Double.compare(specialAttackChance, 0.055D) == 0) specialAttackChance = 0.24D;
+        if (Double.compare(rageSpecialAttackChance, 0.12D) == 0) rageSpecialAttackChance = 0.36D;
+        if (Double.compare(critChance, 0.15D) == 0) critChance = 0.25D;
         configVersion = CURRENT_CONFIG_VERSION;
         return true;
     }

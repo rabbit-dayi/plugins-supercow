@@ -99,7 +99,7 @@ public final class QuirkSkills {
             return false;
         }
         String id = skillId.toLowerCase();
-        return WAVE_ONE.contains(id) || WAVE_TWO.contains(id) || WAVE_THREE.contains(id);
+        return WAVE_ONE.contains(id) || WAVE_TWO.contains(id) || WAVE_THREE.contains(id) || AbsurdSkills.supports(id);
     }
 
     public static boolean cast(ServerLevel level, Cow pet, UUID ownerUuid, LivingEntity target, boolean rage, ServerPlayer owner, String skillId) {
@@ -125,6 +125,7 @@ public final class QuirkSkills {
 
     private static boolean dispatch(ServerLevel level, Cow pet, UUID ownerUuid, LivingEntity target, boolean rage, ServerPlayer owner,
                                     String id, SuperCowConfig cfg, int dur) {
+        if (AbsurdSkills.supports(id)) return AbsurdSkills.cast(level, pet, ownerUuid, target, rage, id, dur);
         switch (id) {
             // ---- wave one ----
             case "cow_rain":
@@ -457,7 +458,7 @@ public final class QuirkSkills {
                             push = new Vec3(1.0D, 0.0D, 0.0D);
                         }
                         push = push.normalize().scale(strength);
-                        victim.push(push.x, 0.18D, push.z);
+                        CombatBalance.push(victim, push.x, 0.18D, push.z);
                     }
                     return false;
                 }
@@ -493,7 +494,7 @@ public final class QuirkSkills {
                         Vec3 pull = center.subtract(victim.position()).multiply(1.0D, 0.0D, 1.0D);
                         if (pull.lengthSqr() > 1.0D) {
                             pull = pull.normalize().scale(0.16D);
-                            victim.push(pull.x, 0.0D, pull.z);
+                            CombatBalance.push(victim, pull.x, 0.0D, pull.z);
                         }
                     }
                 }
@@ -575,7 +576,7 @@ public final class QuirkSkills {
                 if (now % 2 == 0) {
                     for (LivingEntity victim : nearby(level, pet.getX(), pet.getY(), pet.getZ(), 6.0D, ownerUuid, pet)) {
                         Vec3 v = victim.getDeltaMovement();
-                        victim.setDeltaMovement(v.x, Math.min(lift, v.y + lift * 0.5D), v.z);
+                        CombatBalance.setVelocity(victim, v.x, Math.min(lift, v.y + lift * 0.5D), v.z);
                         level.sendParticles(ParticleTypes.END_ROD, victim.getX(), victim.getY() + 0.2D, victim.getZ(), 1, 0.2D, 0.2D, 0.2D, 0.0D);
                     }
                     Vec3 pv = pet.getDeltaMovement();
@@ -657,7 +658,7 @@ public final class QuirkSkills {
         pet.playSound(SoundEvents.FIREWORK_ROCKET_BLAST, 1.4F, 1.1F);
         for (LivingEntity victim : nearby(level, at.x, at.y, at.z, radius, ownerUuid, pet, target)) {
             damage(victim, (float) cfg.confettiDamage, pet, ownerUuid);
-            victim.push(0.0D, 0.18D, 0.0D);
+            CombatBalance.push(victim, 0.0D, 0.18D, 0.0D);
         }
         return true;
     }
@@ -685,7 +686,7 @@ public final class QuirkSkills {
                         damage(victim, rage ? 3.0F : 2.0F, pet, ownerUuid);
                         level.sendParticles(ParticleTypes.CRIT, victim.getX(), victim.getY() + 0.8D, victim.getZ(), 8, 0.3D, 0.3D, 0.3D, 0.1D);
                     }
-                    victim.push(dir.x * 0.55D, 0.22D, dir.z * 0.55D);
+                    CombatBalance.push(victim, dir.x * 0.55D, 0.22D, dir.z * 0.55D);
                 }
                 return true;
             }
@@ -750,7 +751,7 @@ public final class QuirkSkills {
                     pet.playSound(SoundEvents.ANVIL_LAND, 0.9F, 1.2F);
                     for (LivingEntity victim : nearby(level, end.x, end.y, end.z, 2.6D, ownerUuid, pet, target)) {
                         damage(victim, 2.5F, pet, ownerUuid);
-                        victim.push(0.0D, 0.55D, 0.0D);
+                        CombatBalance.push(victim, 0.0D, 0.55D, 0.0D);
                     }
                 }
                 return age < 16;
@@ -853,7 +854,7 @@ public final class QuirkSkills {
                 level.sendParticles(ParticleTypes.CLOUD, pet.getX(), pet.getY() + 0.3D, pet.getZ(), 3, 0.2D, 0.1D, 0.2D, 0.01D);
                 for (LivingEntity victim : nearby(level, pet.getX(), pet.getY(), pet.getZ(), 1.7D, ownerUuid, pet, target)) {
                     damage(victim, rage ? 2.0F : 1.2F, pet, ownerUuid);
-                    victim.push(side.x * 0.6D, 0.2D, side.z * 0.6D);
+                    CombatBalance.push(victim, side.x * 0.6D, 0.2D, side.z * 0.6D);
                 }
                 return true;
             }
@@ -915,7 +916,7 @@ public final class QuirkSkills {
                     pet.playSound(SoundEvents.GENERIC_EXPLODE, 0.8F, 1.4F);
                     for (LivingEntity victim : nearby(level, pet.getX(), pet.getY(), pet.getZ(), 2.6D, ownerUuid, pet, target)) {
                         damage(victim, 2.4F, pet, ownerUuid);
-                        victim.push(0.0D, 0.35D, 0.0D);
+                        CombatBalance.push(victim, 0.0D, 0.35D, 0.0D);
                     }
                 }
                 return age < 20;
@@ -1029,7 +1030,7 @@ public final class QuirkSkills {
                 LivingEntity swing = golem.getTarget();
                 if (swing != null && swing.isAlive() && golem.distanceToSqr(swing) < 9.0D && now % 20 == 0) {
                     damage(swing, 2.0F, pet, ownerUuid);
-                    swing.push(horizontal(golem.position(), swing.position()).normalize().x * 0.4D, 0.2D,
+                    CombatBalance.push(swing, horizontal(golem.position(), swing.position()).normalize().x * 0.4D, 0.2D,
                         horizontal(golem.position(), swing.position()).normalize().z * 0.4D);
                     level.sendParticles(ParticleTypes.CRIT, swing.getX(), swing.getY() + 1.0D, swing.getZ(), 8, 0.3D, 0.3D, 0.3D, 0.1D);
                 }
@@ -1292,7 +1293,7 @@ public final class QuirkSkills {
                     Vec3 v = victim.getDeltaMovement();
                     double sx = (level.random.nextDouble() - 0.5D) * 0.5D;
                     double sz = (level.random.nextDouble() - 0.5D) * 0.5D;
-                    victim.setDeltaMovement(v.x * 0.7D + sx, v.y, v.z * 0.7D + sz);
+                    CombatBalance.setVelocity(victim, v.x * 0.7D + sx, v.y, v.z * 0.7D + sz);
                     victim.hurtMarked = true;
                     if (age % 20 == 0) {
                         victim.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 30, 0));
@@ -1359,7 +1360,7 @@ public final class QuirkSkills {
                 double dist = pull.length();
                 if (dist > 1.0E-4D) {
                     pull = pull.normalize().scale(0.35D);
-                    victimRef.push(pull.x, 0.05D, pull.z);
+                    CombatBalance.push(victimRef, pull.x, 0.05D, pull.z);
                     victimRef.hurtMarked = true;
                 }
                 Vec3 a = pet.position().add(0.0D, 1.0D, 0.0D);
@@ -1430,7 +1431,7 @@ public final class QuirkSkills {
                 }
                 for (LivingEntity victim : nearby(level, victimRef.getX(), victimRef.getY(), victimRef.getZ(), 2.0D, ownerUuid, pet, victimRef)) {
                     Vec3 v = victim.getDeltaMovement();
-                    victim.setDeltaMovement(v.x * 0.45D, Math.min(v.y, -0.02D) - 0.06D, v.z * 0.45D);
+                    CombatBalance.setVelocity(victim, v.x * 0.45D, Math.min(v.y, -0.02D) - 0.06D, v.z * 0.45D);
                     victim.hurtMarked = true;
                     if (age % 20 == 0) {
                         victim.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 40, 2));
@@ -1473,7 +1474,7 @@ public final class QuirkSkills {
                     if (rel.lengthSqr() > 1.0E-4D && rel.normalize().dot(dir) < 0.2D) {
                         continue;
                     }
-                    victim.push(dir.x * 0.6D, 0.32D, dir.z * 0.6D);
+                    CombatBalance.push(victim, dir.x * 0.6D, 0.32D, dir.z * 0.6D);
                     level.sendParticles(ParticleTypes.CLOUD, victim.getX(), victim.getY() + 0.8D, victim.getZ(), 3, 0.2D, 0.2D, 0.2D, 0.05D);
                 }
                 return age < 16;
@@ -1618,7 +1619,7 @@ public final class QuirkSkills {
         level.sendParticles(ParticleTypes.EXPLOSION, at.x, at.y + 0.4D, at.z, 1, 0.0D, 0.0D, 0.0D, 0.0D);
         for (LivingEntity victim : nearby(level, at.x, at.y, at.z, 3.5D, ownerUuid, pet, target)) {
             SuperCowMod.recordDamageOwner(victim.getUUID(), ownerUuid);
-            victim.hurt(DamageSource.LIGHTNING_BOLT, 4.0F);
+            victim.hurt(DamageSource.mobAttack(pet), 4.0F);
             victim.addEffect(new MobEffectInstance(MobEffects.DIG_SLOWDOWN, 100, 1));
             victim.setRemainingFireTicks(40);
         }
@@ -1686,7 +1687,7 @@ public final class QuirkSkills {
                     if (age % 8 == 0) {
                         for (LivingEntity victim : nearby(level, c.getX(), c.getY(), c.getZ(), 1.8D, ownerUuid, pet, target)) {
                             damage(victim, 1.2F, pet, ownerUuid);
-                            victim.push(dir.x * 0.4D, 0.2D, dir.z * 0.4D);
+                            CombatBalance.push(victim, dir.x * 0.4D, 0.2D, dir.z * 0.4D);
                         }
                     }
                 }
@@ -1716,7 +1717,7 @@ public final class QuirkSkills {
                     if (hitOnce.add(victim.getUUID())) {
                         damage(victim, rage ? 4.0F : 3.0F, pet, ownerUuid);
                     }
-                    victim.push(dir.x * 0.9D, 0.35D, dir.z * 0.9D);
+                    CombatBalance.push(victim, dir.x * 0.9D, 0.35D, dir.z * 0.9D);
                 }
                 return true;
             }
@@ -1783,7 +1784,7 @@ public final class QuirkSkills {
                     for (LivingEntity victim : nearby(level, at.x, at.y, at.z, radius, ownerUuid, pet, target)) {
                         Vec3 away = horizontal(at, victim.position());
                         double len = Math.max(0.01D, away.length());
-                        victim.push(away.x / len * 0.9D, 0.35D, away.z / len * 0.9D);
+                        CombatBalance.push(victim, away.x / len * 0.9D, 0.35D, away.z / len * 0.9D);
                         victim.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 60, 1));
                         damage(victim, 1.0F, pet, ownerUuid);
                     }
@@ -2198,7 +2199,7 @@ public final class QuirkSkills {
                     double shove = rage ? 1.3D : 0.95D;
                     for (LivingEntity victim : nearby(level, cx + dir.x * 0.6D, base.y, cz + dir.z * 0.6D, 3.2D, ownerUuid, pet, target)) {
                         damage(victim, rage ? 2.5F : 1.5F, pet, ownerUuid);
-                        victim.setDeltaMovement(dir.x * shove, lift, dir.z * shove);
+                        CombatBalance.setVelocity(victim, dir.x * shove, lift, dir.z * shove);
                         victim.hurtMarked = true;
                     }
                 } else if (age % 6 == 3) {
@@ -2482,7 +2483,7 @@ public final class QuirkSkills {
                         default: break;
                     }
                     damage(victim, amount, pet, ownerUuid);
-                    victim.setDeltaMovement(push.x * shove, lift, push.z * shove);
+                    CombatBalance.setVelocity(victim, push.x * shove, lift, push.z * shove);
                     victim.hurtMarked = true;
                 }
                 return true;
@@ -2502,6 +2503,7 @@ public final class QuirkSkills {
     // ================================================================== infrastructure
     /** 每 tick 推进所有技能任务。 */
     public static void tickAll() {
+        AbsurdSkills.tick(SuperCowMod.getServerTicksStatic());
         if (TASKS.isEmpty()) {
             return;
         }
@@ -2543,6 +2545,7 @@ public final class QuirkSkills {
                 }
             }
         }
+        AbsurdSkills.cleanupOwner(ownerUuid);
         SkillCleanup.cleanupForOwner(ownerUuid);
     }
 
@@ -2555,11 +2558,12 @@ public final class QuirkSkills {
             }
         }
         TASKS.clear();
+        AbsurdSkills.clearAll();
         SkillCleanup.cleanupAll();
     }
 
     public static int activeTasks() {
-        return TASKS.size();
+        return TASKS.size() + AbsurdSkills.activeTasks();
     }
 
     /** 这个工程没有接入日志框架，出错就打到 stdout，绝不让异常冒到服务端主线程。 */

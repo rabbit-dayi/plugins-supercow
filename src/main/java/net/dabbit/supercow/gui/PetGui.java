@@ -456,12 +456,14 @@ public final class PetGui {
                 java.util.Arrays.asList(
                     "§7当前/最近释放：§b" + (currentSkill == null ? "无（待命）" : Skills.displayOf(currentSkill)),
                     "§7普攻剩余冷却：§f" + seconds(mod.getCombatManager().getAttackCooldownRemainingTicks(ownerUuid)),
-                    "§7当前普攻间隔：§f" + seconds(Math.max(11, raging ? cfg.rageAttackCooldownTicks : cfg.attackCooldownTicks)),
+                    "§7普攻基准间隔：§f" + seconds(Math.max(11, raging ? cfg.rageAttackCooldownTicks : cfg.attackCooldownTicks)),
+                    "§7随机浮动：§f±" + Math.max(0, Math.min(20, cfg.attackIntervalJitterTicks)) + " tick（两tick粒度）",
+                    "§7高血量Boss：§f更慢普攻、更多技能",
                     "§7特殊攻击间隔：§f" + seconds(cfg.specialAttackCooldownTicks),
                     "§7召唤间隔：§f" + seconds(cfg.summonCooldownTicks),
                     "§7喂食间隔：§f" + seconds(cfg.feedCooldownTicks),
                     "§7狂暴：" + (raging ? "§c生效中" : "§7未生效"),
-                    "§8普攻剩余时间为实时值；其它显示配置间隔",
+                    "§8剩余冷却为实测截止时间；以上为基准配置",
                     "§8技能名短暂展示最近释放；点击刷新")));
             container.setItem(49, make(Items.PAPER, "§f最近操作",
                 java.util.Arrays.asList(lastFeedback, "§8操作结果保留在此，刷新不会清除")));

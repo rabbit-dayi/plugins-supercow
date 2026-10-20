@@ -347,6 +347,57 @@ public final class Skills {
         add("bat_ufo_abduction", "蝙蝠外星飞碟", "高空蝙蝠编队投下外星牵引光束，把敌人吸往太空",
             "第三类接触实录！夜蝠编队在头顶盘旋成UFO飞碟，一道笔直的白色牵引光柱把地面怪物缓缓吸上天际。",
             3, 6, Items.END_CRYSTAL, true);
+        // Wave four: bounded visual contraptions, with distinct motion/control profiles.
+        add("slime_trampoline", "史莱姆弹簧床", "软垫反复弹跳，短促托起近处怪物",
+            "谁把史莱姆铺成床？绿色软垫上下弹三回，只负责晃晕怪物，不负责售后。", 2, 3, Items.SLIME_BLOCK, true);
+        add("magnet_milk", "磁铁牛奶", "奶桶磁场聚拢怪物并短暂减速",
+            "奶里是不是掺了磁铁？三个奶桶绕圈转，把附近怪物往桶心轻轻拽。", 2, 3, Items.BUCKET, true);
+        add("redstone_disco", "红石迪斯科", "红石灯球跳方阵，节拍中附带短暂虚弱",
+            "无需电路也能蹦迪！红石投影踩着方格舞步闪动，怪物跟错拍就会短暂手软。", 2, 3, Items.REDSTONE, true);
+        add("paper_airplane", "纸飞机快递", "纸飞机扇形滑翔，轻推投递路线附近怪物",
+            "本次快递没有签收码，只有三架纸飞机轮番滑过，在落点盖个轻轻的章。", 2, 3, Items.PAPER, true);
+        add("cheese_meteor", "芝士陨石", "芝士块螺旋下落，落点轻震",
+            "天上掉下来的不是馅饼，而是融化的芝士陨石；只有投影，没有真砸坏的地板。", 2, 3, Items.YELLOW_DYE, true);
+        add("umbrella_spin", "雨伞大风车", "蘑菇伞盘旋转动，横向扫开近处怪物",
+            "晴天也要撑伞！巨型蘑菇伞沿圆盘转圈，把想蹭伞的怪物轻轻扫开。", 2, 3, Items.BROWN_MUSHROOM, true);
+        add("clockwork_carrot", "发条胡萝卜", "胡萝卜按齿轮轨迹蹦跳，短暂减速",
+            "拧上发条就开始加班，胡萝卜沿齿轮节拍蹦跶，怪物却跟不上蔬菜的工时。", 2, 3, Items.CARROT, true);
+        add("dispenser_popcorn", "发射器爆米花", "发射器投影喷出弧线爆米花，轻微顶起",
+            "没有红石、没有真弹药，只有抛物线爆米花；看电影前先给怪物一点热身。", 2, 3, Items.DISPENSER, true);
+        add("rubber_duck_fleet", "橡皮鸭舰队", "三只鸭形投影蛇形巡航，横向轻推",
+            "浴缸舰队申请出征！小黄鸭不下真水，沿波浪队列摇摆着驶过战场。", 2, 3, Items.EGG, true);
+        add("tofu_guillotine", "豆腐切切机", "豆腐刀架轮流落下，产生短暂虚弱",
+            "豆腐车间认真开工，三道软绵绵的白色刀影轮流落下，威风比伤害更大。", 2, 3, Items.WHITE_WOOL, true);
+        add("gravity_yo_yo", "重力悠悠球", "悠悠球上下往返，交替轻抬和回拉",
+            "抛出去又收回来，重力也被当成玩具；怪物体验的只是轻量版上上下下。", 2, 3, Items.ENDER_PEARL, true);
+        add("milk_tea_tornado", "奶茶龙卷风", "奶茶杯螺旋升高，轻拉附近怪物",
+            "少糖去冰加旋风！奶茶投影绕成小龙卷，怪物只能排队，不能免费续杯。", 2, 3, Items.MILK_BUCKET, true);
+        add("bell_metronome", "钟声节拍器", "钟摆按节拍左右摆动，轻推并短暂减速",
+            "牧场音乐课开课啦！钟摆准点扫过，怪物节奏不稳就只好暂时慢半拍。", 2, 3, Items.BELL, true);
+        add("pumpkin_bowling", "南瓜保龄球", "南瓜沿地面滚过，侧向撞开怪物",
+            "没有球道也要打保龄球，南瓜贴地滚动；怪物不是瓶子，撞完仍能好好站着。", 2, 3, Items.PUMPKIN, true);
+        add("bread_frisbee", "面包飞盘", "面包沿回旋镖轨迹折返，轻推两侧",
+            "面包不落地，直接当飞盘！绕个弯再回来，顺路给怪物递一份战斗早餐。", 2, 3, Items.BREAD, true);
+        add("fishing_moon", "钓一轮月亮", "钓竿挂起月亮光点，轻轻上提附近怪物",
+            "今天不钓鱼，改钓月亮；夜色只是粒子表演，不会把怪物传送上天。", 2, 3, Items.FISHING_ROD, true);
+        add("bookshelf_domino", "书架多米诺", "书架投影依次倾倒，附带短暂虚弱",
+            "知识就是力量，但这次知识先排队倒下；书架仅是投影，不拆谁家的图书馆。", 2, 3, Items.BOOKSHELF, true);
+        add("potato_satellite", "土豆卫星", "三颗土豆沿倾斜轨道环绕，向外轻推",
+            "农业航天计划正式升空！土豆卫星绕着目标转，轨道很认真，载荷很抽象。", 2, 3, Items.POTATO, true);
+        add("carpet_magic_show", "地毯魔术秀", "飞毯波浪升降，短暂轻抬并减速",
+            "地毯不负责载客，只负责表演；升降波纹经过时，怪物会觉得脚底有点飘。", 2, 3, Items.PURPLE_CARPET, true);
+        add("watermelon_catapult", "西瓜投石机", "西瓜按抛物线落下，落点轻推",
+            "瓜熟了就该上投石机？三枚投影西瓜抛进落点，地面完好，怪物稍微挪步。", 2, 3, Items.MELON, true);
+        add("lantern_jellyfish", "灯笼水母", "灯笼水母伸缩漂游，轻拉并短暂虚弱",
+            "水母忘带海水，干脆提着灯笼来上班；触须是光点，不是会蜇人的真实生物。", 2, 3, Items.LANTERN, true);
+        add("hopper_vacuum", "漏斗吸尘器", "漏斗漏斗形旋转，轻吸怪物并短暂减速",
+            "牧场大扫除，把怪物当灰尘轻轻吸拢；不吸玩家，也不偷物品。", 2, 3, Items.HOPPER, true);
+        add("cake_conveyor", "蛋糕传送带", "蛋糕方阵循环平移，轻推沿线怪物",
+            "自动化甜品线开始运行，蛋糕排队经过；没有真实传送带，也不会搬走方块。", 2, 3, Items.CAKE, true);
+        add("amethyst_orchestra", "紫晶交响乐", "紫色晶点按和弦摆动，附带短暂虚弱",
+            "紫色染料客串晶石乐器，奏一小段不扰民的交响乐；旧版本也能听个热闹。", 2, 3, Items.PURPLE_DYE, true);
+        add("sock_black_hole", "袜子黑洞", "黑袜绕成收缩旋涡，轻拉近处怪物",
+            "洗衣机失踪的袜子终于找到了，原来在这里转成小黑洞；吸力有限，绝不吞世界。", 2, 3, Items.BLACK_WOOL, true);
     }
 
     private static void add(String id, String display, String hint, String intro, int wn, int wr, Item icon, boolean rollable) {
