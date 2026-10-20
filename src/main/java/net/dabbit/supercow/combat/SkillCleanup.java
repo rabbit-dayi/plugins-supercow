@@ -46,6 +46,16 @@ public final class SkillCleanup {
         if (entity == null) {
             return;
         }
+        SuperCowMod mod = SuperCowMod.getInstance();
+        if (mod != null && mod.getConfig() != null && !TRACKED.containsKey(entity.getUUID())) {
+            int budget = Math.max(16, Math.min(512, mod.getConfig().combatSkillEntityBudget));
+            if (TRACKED.size() >= budget) {
+                // All tracked skill sources, including delayed waves and ordinary arrows, share
+                // this final admission check. No single burst can overflow the configured cap.
+                entity.remove();
+                return;
+            }
+        }
         entity.addTag(TAG_SKILL);
         entity.addTag(TAG_KIND_PREFIX + kind);
         if (ownerUuid != null) {

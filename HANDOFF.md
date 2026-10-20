@@ -139,3 +139,30 @@
 - 生产部署脚本 /tmp/sc-deploy-1.0.3.sh，日志 /tmp/sc-deploy-1.0.3.log；先公告、save-all flush、stop，等tmux16:0.0返回bash，再备份旧JAR与配置、替换并./start.sh。实际备份路径/启动结论见后续核验记录。
 - Release计划tag1.0.3-1.16.5，保留旧标签；上传binary与sources，说明直接减伤与后续DOT/环境伤害的边界。正式发布结果以GitHub及后续核验为准，§8的未发布状态为本节前的历史。
 - 生产核验完成：/opt/hf/final-paradox-1.16.5，PID1844642，25565监听，latest.log确认supercow1.0.3，11:18:15 Done(4.209s)。备份 /opt/hf/final-paradox-1.16.5/backups/supercow-pre-1.0.3-20261020-111747/ 含正式1.0.2 JAR与更新前配置，并保留1.0.3发布JAR。生产与发布构建SHA256相同。schema5按预期迁移，followDistance=3自定义保留；回滚应平滑stop，移出1.0.3 JAR，恢复备份1.0.2及原配置，再./start.sh，不能同时放两个supercow JAR。
+
+## 10. 未发布：战斗周旋与等级同轮多技能（2026-10-20）
+
+- 对应新需求：攻击后走位、提高技能概率、随等级同轮释放多个技能。仅测试服验证，生产/GH仍为上一节1.0.3，当前工作区不递增版本、不部署生产。
+- schema6：普通技能概率.24→.40，狂暴.36→.55，Boss.50→.70；只精确迁移旧默认。schema5的其他自定义历史值不再重过schema5迁移。攻击间隔/随机范围、暴击、直接伤害*.2、额外击退*.2及Boss谨慎规则不变。概率是特殊冷却允许时按轮判定，并非每tick/每次必出；CD仍普通80/Boss60 tick。
+- 新配置：combatEvasionEnabled=true、combatRetreatTicks=8、combatRetreatDistance=2.5、multiSkillEnabled=true、multiSkillLevelStep=5、multiSkillMaxCount=4、combatSkillEntityBudget=128。GUI44展示等级容量、概率和限制。
+- CombatManager：成功攻击/技能轮后后斜撤步，冷却中近距离继续侧退，接近下次攻击时恢复接敌；短路径跨战斗tick复用。候选两侧斜退/侧移，检查失败则保留普通战斗，不强制穿墙/传送。目标变更、死亡、被动、召回、登出清理战术状态。审查发现的clearTarget和定期target迭代清理遗漏均已修正，战术路径用stopCombatStep独立停止，不误删主人跟随路径。
+- PathfindingManager：tactical短程刹车带，不受原8格交战带限制、不叠加旧随机横漂。沿线每.4格检查完整碰撞箱、九点占地支撑/液体/火/岩浆块/营火/仙人掌/浆果/凋零玫瑰与已加载区块。战术及开启周旋的战斗禁旧随机搞笑跳跃，真正一格障碍仍可跳。不是全局寻路规划或无敌闪避，动态地形/敌方击退不能保证零受伤。
+- 同轮容量min(clamp(maxCount,1,4),1+max(0,level)/max(1,levelStep))：Lv1/5/10/15→1/2/3/4。一次概率判定、一个共享特殊冷却；启用池不放回加权抽不同ID，失败技能不占成功槽，最多遍历技能总数。普通arrow从特殊池排除，仍保留为远程基础攻击。legacySkillsEnabled=false保留距离池，额外校验开关。飞天独立触发、原任务上限仍生效，显示的容量不是每轮无条件全出。
+- SkillCleanup.track统一最终实体准入，所有登记的箭/召唤/延迟波次共享上限（配置限16..512）；已满则移除新实体，因此大批次也不突破预算。粒子与无需实体的即时效果不由实体数衡量，不能据此保证所有CPU负载上限。预算小/已满时可减少该轮实际技能实体，追踪前后的短暂构造成本仍存在。
+- 构建 /tmp/sc-tactics-final-build.log BUILD SUCCESSFUL；Java测试NO-SOURCE。/tmp/TacticsMigrationCheck.java 检查schema2/3/4/5→6、定制概率/间隔/暴击不覆盖及幂等，TACTICS_MIGRATION_PASS。
+- 集成：/tmp/sc-tactics-test5.log和/tmp/sc-tactics-final-test.log 四档同轮实体3/6/9/12（四种新技能各3投影），关闭multi为3，预算16时小组合12仍允许；活动实体最后归0。初轮测试配置只关闭已有json键、漏掉缺省启用技能，曾误观测其他随机技能，补齐全部117个键后重测通过。activity不是合法命令，清理统计必须/supercow skills。
+- /tmp/sc-tactics-budget.log HARD_BUDGET_PASS16：cowRainCount40、预算16，连续两次手动技能均不超过16。
+- 周旋最终必须看 /tmp/sc-tactics-true-movement.log：主人GUI38传送确认实际宠物，再加sc_owned_TacticMove短标签，PET_IDENTITY记录实体UUID。9秒12次伤害、距离2..7.224格、全程Y=201；目标死亡后250ms至850ms间水平移动0（TARGET_DEATH_STOP_PASS）。早期新测试身份重登后宠物重建丢临时tag，普通牛观测不能作为周旋结论；已用owner-only GUI校验解决。旧随机跳跃确实干扰过贴地断言，已禁用并复测。
+- 可复现脚本 scripts/tactics-smoke.js / scripts/tactics-budget-smoke.js，均需SC_TEST_MUTATIONS=1和外部备份，固定25566；不得生产使用。技能脚本预设四个等级身份及TacticMove为OP，GUI38用于权威选择宠物。来源安全/原版减伤、Boss定义等前轮回归仍有效，未宣称所有117技能在同轮组合下穷举或玩家客户端FPS测试。
+
+- 最终恢复完成：/tmp/sc-tactics-restore.log TACTICS_RESTORE_COMPLETE；/tmp/sc-tactics-restored-server.log 12:07:17 Done4.195s，PID1919169/25566。原world/default、原TestBot单宠物存档与原OP列表已恢复，测试身份数据已撤销；配置仅预期schema6迁移，follow20保留。工作区/测试JAR均SHA256 e8575112141c87419e98b3ea8bb88a31284707cb5fba343dce39ec723e70ff52；生产仍SHA256 6e9ef7c108efbf2b79f22a756a137c1fef3de2e011d37e7b342efbfbb20b5b73。
+
+## 11. 生产部署 1.0.4（2026-10-20；不更新 Release）
+
+- 用户本次授权部署生产与提交推送GitHub；消息尾部未完整，不据此创建Release或移动旧标签。§10“未发布”为历史状态，本节上线核验后覆盖。mod_version递增1.0.4，保留正式1.0.3 Release。
+- 离线构建 /tmp/sc-104-build.log BUILD SUCCESSFUL（5秒，test NO-SOURCE）；/tmp/sc-104-compare.py 核验全部94个class与完整实测战术构建逐字节一致，唯一变化为fabric.mod.json版本。正式JAR SHA256 43422eaf417d8e8526070da05fadccfee312240f88e7e23cfeb451f8787906d2。
+- 部署脚本 /tmp/sc-deploy-1.0.4.sh，日志 /tmp/sc-deploy-1.0.4.log：公告30秒、save-all flush、stop；仅原生产PID退出且tmux16:0.0返回bash后备份并替换。备份包含旧1.0.3、新1.0.4、原supercow-config.json与supercow-pets.json。保留followDistance=3等自定义，仅精确迁移旧默认概率和schema6；不向生产注入测试宠物/配置。
+- 生产核验完成：2026-10-20 14:21:08，latest.log确认supercow1.0.4、初始化成功、Done(3.861s)；PID2116033，25565监听。构建与生产JAR SHA256一致。无新插件异常，只有已有advancement资源报错。
+- 备份路径 /opt/hf/final-paradox-1.16.5/backups/supercow-pre-1.0.4-20261020-142019/。配置逐键核对仅三项默认概率、configVersion5→6及七项新增战术/预算配置变化；followDistance=3、伤害与间隔等自定义项均保持。
+- Git提交范围：五个战斗/寻路/配置/GUI Java文件、版本号、两份测试脚本及本交接文档，推送fabric-1.16.5；不创建tag/Release。仓库origin只跟踪main，核对该分支须git fetch origin fabric-1.16.5后比较FETCH_HEAD，推送须显式HEAD:refs/heads/fabric-1.16.5。
+- 回滚：平滑stop并等Java退出，移出mods内1.0.4，恢复该备份1.0.3 JAR和supercow-config.json，再./start.sh；不要同时保留两个supercow JAR。宠物数据已备份，但不要无故覆盖更新后的正常宠物进度。

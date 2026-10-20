@@ -79,6 +79,12 @@ public class CombatManager {
     private final Map<UUID, PetMode> petModes = new HashMap<>();
     private final Map<UUID, LivingEntity> currentTargets = new HashMap<>();
     private final Map<UUID, Long> nextAttackTick = new HashMap<>();
+    private final Map<UUID, EvasionStep> evasionSteps = new HashMap<>();
+    private static final class EvasionStep {
+        final UUID target;
+        final long until;
+        EvasionStep(UUID target, long until) { this.target = target; this.until = until; }
+    }
     private final Map<UUID, Long> lastSpecialAttackTick = new HashMap<>();
     // Guard against targets that stopped ticking (e.g. entities frozen by another mod):
     // such entities never decrement invulnerableTime, so every hurt() call silently fails
@@ -225,6 +231,8 @@ public class CombatManager {
     }
 
     public void clearTarget(UUID ownerUuid) {
+        evasionSteps.remove(ownerUuid);
+        pathfindingManager.stopCombatStep(mod.getActivePet(ownerUuid));
         LivingEntity prev = currentTargets.remove(ownerUuid);
         if (prev != null && prev.isAlive()) {
             prev.setGlowing(false);
@@ -378,11 +386,7 @@ public class CombatManager {
         double dist = pet.distanceTo(target);
         double moveSpeed = rage ? 1.35D : 1.15D;
 
-        if (dist > cfg.closeRangeDistance) {
-            pathfindingManager.moveToEntity(pet, target, moveSpeed);
-        } else {
-            pathfindingManager.stopPathfinding(pet);
-        }
+        updateCombatMovement(ownerUuid, pet, target, dist, moveSpeed, nowTick, cfg);
 
         if (nowTick < nextAttackTick.getOrDefault(ownerUuid, nowTick)) {
             return;
@@ -394,6 +398,44 @@ public class CombatManager {
         nextAttackTick.put(ownerUuid, nowTick + sampleAttackIntervalTicks(rage, target, cfg));
 
         performCombatAction(level, ownerUuid, pet, owner, target, data, dist, rage, nowTick, cfg);
+        if (target.isAlive() && dist <= 6.0D) startEvasion(ownerUuid, pet, target, nowTick, cfg);
+    }
+
+    private void updateCombatMovement(UUID ownerUuid, Cow pet, LivingEntity target, double dist,
+                                      double speed, long now, SuperCowConfig cfg) {
+        EvasionStep step = evasionSteps.get(ownerUuid);
+        if (cfg.combatEvasionEnabled && step != null && step.target.equals(target.getUUID())
+            && now < step.until && dist < 8.0D && !pathfindingManager.isSpiraling(pet.getUUID())) {
+            PathfindingManager.faceEntity(pet, target);
+            return; // Keep the validated waypoint, rather than resetting it every combat tick.
+        }
+        evasionSteps.remove(ownerUuid);
+        if (cfg.combatEvasionEnabled && nextAttackTick.getOrDefault(ownerUuid, now) - now > 6L
+            && dist < 4.5D && startEvasion(ownerUuid, pet, target, now, cfg)) return;
+        if (dist > cfg.closeRangeDistance) pathfindingManager.moveToEntity(pet, target, speed);
+        else pathfindingManager.stopPathfinding(pet);
+        PathfindingManager.faceEntity(pet, target);
+    }
+
+    private boolean startEvasion(UUID ownerUuid, Cow pet, LivingEntity target, long now, SuperCowConfig cfg) {
+        if (!cfg.combatEvasionEnabled || pathfindingManager.isSpiraling(pet.getUUID())) return false;
+        net.minecraft.world.phys.Vec3 away = pet.position().subtract(target.position()).multiply(1.0D, 0.0D, 1.0D);
+        if (away.lengthSqr() < 0.01D) away = new net.minecraft.world.phys.Vec3(1.0D, 0.0D, 0.0D);
+        away = away.normalize();
+        double length = Double.isFinite(cfg.combatRetreatDistance) ? Math.max(0.5D, Math.min(4.0D, cfg.combatRetreatDistance)) : 2.5D;
+        int side = ((ownerUuid.hashCode() & 1) == 0) ? 1 : -1;
+        // Back-diagonal first, opposite side second, pure lateral last. No teleport or knockback.
+        double[] angles = {side * 35.0D, -side * 35.0D, side * 80.0D, -side * 80.0D};
+        for (double angle : angles) {
+            double rad = Math.toRadians(angle), c = Math.cos(rad), s = Math.sin(rad);
+            net.minecraft.world.phys.Vec3 offset = new net.minecraft.world.phys.Vec3(away.x * c - away.z * s, 0.0D, away.x * s + away.z * c).scale(length);
+            if (pathfindingManager.moveToCombatPosition(pet, pet.position().add(offset), 1.25D)) {
+                evasionSteps.put(ownerUuid, new EvasionStep(target.getUUID(), now + Math.max(2, Math.min(16, cfg.combatRetreatTicks))));
+                PathfindingManager.faceEntity(pet, target);
+                return true;
+            }
+        }
+        return false; // Confined/unsafe: preserve ordinary combat rather than force an unsafe dodge.
     }
 
     /** True while a previously frozen entity is still frozen and still on the blacklist. */
@@ -708,8 +750,21 @@ public class CombatManager {
         specialProb = Math.max(0.0D, Math.min(1.0D, specialProb));
 
         if (canSpecial && random.nextDouble() < specialProb) {
-            String chosen = cfg.legacySkillsEnabled ? rollWeightedSkill(rage) : chooseSpecialAttackByDistance(dist, cfg);
-            if (executeNamedAttack(level, ownerUuid, pet, owner, target, chosen, rage, false)) {
+            int capacity = cfg.multiSkillEnabled ? (int) Math.min(Math.max(1, Math.min(4, cfg.multiSkillMaxCount)),
+                1L + Math.max(0, data.level) / Math.max(1, cfg.multiSkillLevelStep)) : 1;
+            java.util.Set<String> drawn = new java.util.HashSet<>();
+            drawn.add("arrow"); // Basic ranged fallback is not an extra special-skill slot.
+            int released = 0;
+            int budget = Math.max(16, Math.min(512, cfg.combatSkillEntityBudget));
+            for (int tries = 0; tries < Skills.all().size() && released < capacity; tries++) {
+                if (SkillCleanup.countAll() >= budget || !target.isAlive()) break;
+                String chosen = cfg.legacySkillsEnabled ? rollWeightedSkill(rage, drawn) : chooseSpecialAttackByDistance(dist, cfg);
+                if (chosen == null) break;
+                if (!drawn.add(chosen)) { if (!cfg.legacySkillsEnabled && tries >= 16) break; else continue; }
+                if (!cfg.isSkillEnabled(chosen)) continue;
+                if (executeNamedAttack(level, ownerUuid, pet, owner, target, chosen, rage, false)) released++;
+            }
+            if (released > 0) {
                 lastSpecialAttackTick.put(ownerUuid, nowTick);
                 return;
             }
@@ -725,14 +780,14 @@ public class CombatManager {
 
     // -------------------------------------------------------------------------------------------
     // Original skill table (CombatManager.kt:549-657). The Bukkit plugin did NOT pick a skill by
-    // range: it rolled a single weighted table for every attack, so a close-range pet could still
+    // range: it used a weighted table, so a close-range pet could still
     // launch an exploding cow and a long-range pet could start a music attack. That unpredictability
-    // is restored here; the distance pools below remain as a fallback when the legacy table is off.
+    // is retained; special rounds draw distinct skills, with distance pools as the nonlegacy fallback.
     // -------------------------------------------------------------------------------------------
     // The table itself lives in Skills (weights normal/rage). Only "rollable" skills take part:
     // sky_spiral is exclusive to its own trigger, and anything the owner disabled in the GUI is
     // skipped, so a switched-off skill can never be drawn.
-    private String rollWeightedSkill(boolean rage) {
+    private String rollWeightedSkill(boolean rage, java.util.Set<String> excluded) {
         SuperCowConfig cfg = mod.getConfig();
         // Rebuilt in place instead of allocating a fresh ArrayList per attack. Skills.all() is an
         // unmodifiable view whose contents can change when the owner toggles a skill, so the
@@ -751,7 +806,7 @@ public class CombatManager {
         int total = 0;
         for (int i = 0; i < rollScratchAll.length; i++) {
             Skills.Skill skill = rollScratchAll[i];
-            if (skill == null || !skill.rollable || !cfg.isSkillEnabled(skill.id)) {
+            if (skill == null || !skill.rollable || excluded.contains(skill.id) || !cfg.isSkillEnabled(skill.id)) {
                 continue;
             }
             int w = rage ? skill.weightRage : skill.weightNormal;
@@ -762,7 +817,7 @@ public class CombatManager {
             total += w;
         }
         if (total <= 0) {
-            return "arrow";
+            return null;
         }
         int roll = random.nextInt(total);
         for (int i = 0; i < size; i++) {
@@ -997,6 +1052,8 @@ public class CombatManager {
                     untickableTargets.remove(targetId);
                     untickableSnapshots.remove(targetId);
                 }
+                evasionSteps.remove(entry.getKey());
+                pathfindingManager.stopCombatStep(pet);
                 it.remove();
             }
         }
@@ -1008,6 +1065,7 @@ public class CombatManager {
         }
         currentTargets.clear();
         nextAttackTick.clear();
+        evasionSteps.clear();
         lastSpecialAttackTick.clear();
         currentSkillIds.clear();
         currentSkillEndTick.clear();

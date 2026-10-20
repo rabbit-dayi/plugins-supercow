@@ -52,6 +52,7 @@ public class PathfindingManager {
         double speedModifier;
         /** true when this path exists to stand near the owner (not to chase something). */
         boolean followOwner;
+        boolean tactical;
         Vec3 lastPos;
         int stuckTicks;
         int ticksActive;
@@ -148,6 +149,7 @@ public class PathfindingManager {
             state.followOwner = false;
         }
         state.followOwner = follow;
+        state.tactical = false;
         if (follow) {
             // A follow path is long-lived: the owner keeps walking. Reusing the old state must not
             // inherit the "standing inside the band" tick counter from a previous stop.
@@ -158,6 +160,55 @@ public class PathfindingManager {
         } else {
             mob.getNavigation().stop();
         }
+    }
+
+    public void stopCombatStep(Mob mob) {
+        if (mob == null) return;
+        PathState state = activePaths.get(mob.getUUID());
+        if (state != null && state.tactical) stopPathfinding(mob);
+    }
+
+    /** Short grounded tactical step: reject collisions, ledges, fluids and hazardous ground. */
+    public boolean moveToCombatPosition(Mob mob, Vec3 destination, double speedModifier) {
+        if (mob == null || destination == null || !mob.isAlive() || !mob.isOnGround()) return false;
+        Vec3 delta = destination.subtract(mob.position());
+        double length = delta.length();
+        if (!Double.isFinite(length) || length < 0.3D || length > 5.0D) return false;
+        int samples = Math.max(1, (int) Math.ceil(length / 0.4D));
+        for (int i = 1; i <= samples; i++) {
+            Vec3 offset = delta.scale((double) i / samples);
+            Vec3 at = mob.position().add(offset);
+            net.minecraft.core.BlockPos feet = new net.minecraft.core.BlockPos(at);
+            if (!mob.level.hasChunkAt(feet) || !mob.level.noCollision(mob, mob.getBoundingBox().move(offset))) return false;
+            double half = mob.getBbWidth() * 0.5D + 0.02D;
+            for (int ix = -1; ix <= 1; ix++) {
+                double ox = ix * half;
+                for (int iz = -1; iz <= 1; iz++) {
+                    double oz = iz * half;
+                    net.minecraft.core.BlockPos footprint = new net.minecraft.core.BlockPos(at.x + ox, at.y, at.z + oz);
+                    if (!mob.level.hasChunkAt(footprint)) return false;
+                    net.minecraft.world.level.block.state.BlockState ground = mob.level.getBlockState(footprint.below());
+                    net.minecraft.world.level.block.state.BlockState body = mob.level.getBlockState(footprint);
+                    if (!ground.getMaterial().isSolid() || !mob.level.getFluidState(footprint).isEmpty()
+                        || hazardousStepBlock(ground) || hazardousStepBlock(body)) return false;
+                }
+            }
+        }
+        moveToPosition(mob, destination, speedModifier);
+        PathState state = activePaths.get(mob.getUUID());
+        if (state != null) state.tactical = true;
+        return state != null;
+    }
+
+    private static boolean hazardousStepBlock(net.minecraft.world.level.block.state.BlockState state) {
+        return state.is(net.minecraft.world.level.block.Blocks.MAGMA_BLOCK)
+            || state.is(net.minecraft.world.level.block.Blocks.CACTUS)
+            || state.is(net.minecraft.world.level.block.Blocks.CAMPFIRE)
+            || state.is(net.minecraft.world.level.block.Blocks.SOUL_CAMPFIRE)
+            || state.is(net.minecraft.world.level.block.Blocks.FIRE)
+            || state.is(net.minecraft.world.level.block.Blocks.SOUL_FIRE)
+            || state.is(net.minecraft.world.level.block.Blocks.SWEET_BERRY_BUSH)
+            || state.is(net.minecraft.world.level.block.Blocks.WITHER_ROSE);
     }
 
     /** Walk to an entity for combat / escort purposes (combat movement band). */
@@ -182,6 +233,7 @@ public class PathfindingManager {
             state.legacy = legacy;
             state.followOwner = false;
         }
+        state.tactical = false;
         if (!legacy) {
             mob.getNavigation().moveTo(pos.x, pos.y, pos.z, speedModifier);
         } else {
@@ -486,7 +538,8 @@ public class PathfindingManager {
             inCombat = !(state.targetEntity instanceof net.minecraft.world.entity.player.Player);
             followingOwner = !inCombat;
         }
-        double[] bands = followingOwner ? followBands(cfg) : combatBands(state, cfg);
+        double[] bands = state.tactical ? new double[] {0.25D, 1.0D, 1.5D}
+            : followingOwner ? followBands(cfg) : combatBands(state, cfg);
         double arrive = bands[0];
         double optimal = bands[1];
         double chaseCap = bands[2];
@@ -571,7 +624,7 @@ public class PathfindingManager {
         // Kept for combat only: while it is just walking (follow mode, no target) the pet should
         // walk a straight line like a normal animal instead of dancing in place.
         // Following the owner is not combat: the pet should walk, not dance.
-        boolean strafing = (!cfg.legacyStrafeOnlyInCombat || inCombat) && !followingOwner;
+        boolean strafing = !state.tactical && (!cfg.legacyStrafeOnlyInCombat || inCombat) && !followingOwner;
         double vx = flat.x;
         double vz = flat.z;
         if (strafing) {
@@ -609,7 +662,8 @@ public class PathfindingManager {
             boolean headClear = !mob.level.getBlockState(new BlockPos(pos.x, pos.y + 2.0D, pos.z)).getMaterial().isSolid();
             if (blocked && stepClear && headClear) {
                 vy = cfg.legacyJumpPower;
-            } else if (state.jumpCooldown <= 0 && RANDOM.nextDouble() < 0.03D) {
+            } else if (!state.tactical && !(inCombat && cfg.combatEvasionEnabled)
+                && state.jumpCooldown <= 0 && RANDOM.nextDouble() < 0.03D) {
                 // The original had a commented-out random hop; keep it as a comedic quirk.
                 vy = cfg.legacyJumpPower * 0.8D;
                 state.jumpCooldown = 40;

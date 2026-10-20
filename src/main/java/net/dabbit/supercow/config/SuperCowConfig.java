@@ -39,8 +39,8 @@ public class SuperCowConfig {
     // Combat core (conservative)
     public int attackCooldownTicks = 18; // 0.9s baseline, sampled once per attack with jitter
     public int specialAttackCooldownTicks = 80; // 4.0s minimum between successful skills
-    public double specialAttackChance = 0.24; // More skill opportunities, still gated by cooldown
-    public double rageSpecialAttackChance = 0.36; // Rage favors skills without changing summon counts
+    public double specialAttackChance = 0.40; // Per-round skill chance, still gated by cooldown
+    public double rageSpecialAttackChance = 0.55; // Rage favors skills without changing summon counts
     // Balance layer: applied exactly once to pet-owned damage, not player damage.
     public double outgoingDamageMultiplier = 0.2;
     public double extraKnockbackMultiplier = 0.2;
@@ -48,13 +48,22 @@ public class SuperCowConfig {
     public double bossMaxHealthThreshold = 400.0; // strict >, uses maximum health
     public double bossDamageMultiplier = 0.75;
     public double bossAttackIntervalMultiplier = 1.35;
-    public double bossSpecialAttackChance = 0.50;
+    public double bossSpecialAttackChance = 0.70;
     public int bossSpecialAttackCooldownTicks = 60;
     public double closeRange = 4.0;
     public double mediumRange = 8.0;
     public double farRange = 14.0;
     public double maxTargetDistance = 16.0;
     public double teleportToOwnerDistance = 32.0;
+
+    // Combat evasion and level-scaled skill rounds (schema 6).
+    public boolean combatEvasionEnabled = true;
+    public int combatRetreatTicks = 8;
+    public double combatRetreatDistance = 2.5;
+    public boolean multiSkillEnabled = true;
+    public int multiSkillLevelStep = 5; // Capacity: 1 + max(0, level) / step (integer division)
+    public int multiSkillMaxCount = 4; // Hard ceiling remains four skills per round
+    public int combatSkillEntityBudget = 128; // Shared cap for combat skill entities
 
     // Combat orchestration (conservative)
     public double closeRangeDistance = 3.0; // melee distance
@@ -256,7 +265,7 @@ public class SuperCowConfig {
 
     /** Schema version so one-shot default migrations never overwrite user-chosen values on reload. */
     public int configVersion = 0;
-    public static final int CURRENT_CONFIG_VERSION = 5;
+    public static final int CURRENT_CONFIG_VERSION = 6;
 
     public static SuperCowConfig load(File file) {
         if (file.exists()) {
@@ -343,12 +352,20 @@ public class SuperCowConfig {
             if (Double.compare(specialAttackChance, legacy ? 0.15D : 0.09D) == 0) specialAttackChance = 0.055D;
             if (Double.compare(rageSpecialAttackChance, legacy ? 0.25D : 0.16D) == 0) rageSpecialAttackChance = 0.12D;
         }
-        if (attackCooldownTicks == 14) attackCooldownTicks = 18;
-        if (rageAttackCooldownTicks == 12) rageAttackCooldownTicks = 16;
-        if (specialAttackCooldownTicks == 120) specialAttackCooldownTicks = 80;
-        if (Double.compare(specialAttackChance, 0.055D) == 0) specialAttackChance = 0.24D;
-        if (Double.compare(rageSpecialAttackChance, 0.12D) == 0) rageSpecialAttackChance = 0.36D;
-        if (Double.compare(critChance, 0.15D) == 0) critChance = 0.25D;
+        if (configVersion < 5) {
+            if (attackCooldownTicks == 14) attackCooldownTicks = 18;
+            if (rageAttackCooldownTicks == 12) rageAttackCooldownTicks = 16;
+            if (specialAttackCooldownTicks == 120) specialAttackCooldownTicks = 80;
+            if (Double.compare(specialAttackChance, 0.055D) == 0) specialAttackChance = 0.24D;
+            if (Double.compare(rageSpecialAttackChance, 0.12D) == 0) rageSpecialAttackChance = 0.36D;
+            if (Double.compare(critChance, 0.15D) == 0) critChance = 0.25D;
+        }
+        if (configVersion < 6) {
+            // Exact schema-5 defaults only: never replace customized probabilities.
+            if (Double.compare(specialAttackChance, 0.24D) == 0) specialAttackChance = 0.40D;
+            if (Double.compare(rageSpecialAttackChance, 0.36D) == 0) rageSpecialAttackChance = 0.55D;
+            if (Double.compare(bossSpecialAttackChance, 0.50D) == 0) bossSpecialAttackChance = 0.70D;
+        }
         configVersion = CURRENT_CONFIG_VERSION;
         return true;
     }

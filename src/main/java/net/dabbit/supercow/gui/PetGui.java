@@ -452,6 +452,11 @@ public final class PetGui {
             }
             targetLore.add("§8点击刷新（只读，不强制切换目标）");
             container.setItem(SLOT_TARGET, make(Items.BOW, "§c战斗目标", targetLore));
+            int skillLevelStep = Math.max(1, cfg.multiSkillLevelStep);
+            int skillMaxCount = Math.max(1, Math.min(4, cfg.multiSkillMaxCount));
+            int roundSkillLimit = cfg.multiSkillEnabled
+                ? (int) Math.min(skillMaxCount, 1L + Math.max(0, data != null ? data.level : 0) / skillLevelStep)
+                : 1;
             container.setItem(SLOT_COOLDOWNS, make(Items.CLOCK, "§e冷却与战斗节奏",
                 java.util.Arrays.asList(
                     "§7当前/最近释放：§b" + (currentSkill == null ? "无（待命）" : Skills.displayOf(currentSkill)),
@@ -459,6 +464,13 @@ public final class PetGui {
                     "§7普攻基准间隔：§f" + seconds(Math.max(11, raging ? cfg.rageAttackCooldownTicks : cfg.attackCooldownTicks)),
                     "§7随机浮动：§f±" + Math.max(0, Math.min(20, cfg.attackIntervalJitterTicks)) + " tick（两tick粒度）",
                     "§7高血量Boss：§f更慢普攻、更多技能",
+                    "§7技能触发概率：§f普通 " + decimal(cfg.specialAttackChance * 100.0D) + "% / 狂暴 "
+                        + decimal(cfg.rageSpecialAttackChance * 100.0D) + "%",
+                    "§7Boss技能概率：§f" + decimal(cfg.bossSpecialAttackChance * 100.0D) + "%",
+                    "§7同轮技能上限：§f" + roundSkillLimit + " 个" + (cfg.multiSkillEnabled ? "" : "（多技能关闭）"),
+                    "§7等级阶梯：§f每 " + skillLevelStep + " 级 +1，最多 " + skillMaxCount + " 个",
+                    "§8容量 = 1 + 等级 / 阶梯（向下取整）",
+                    "§8概率按轮判定；实际释放受技能开关、冷却与实体预算限制",
                     "§7特殊攻击间隔：§f" + seconds(cfg.specialAttackCooldownTicks),
                     "§7召唤间隔：§f" + seconds(cfg.summonCooldownTicks),
                     "§7喂食间隔：§f" + seconds(cfg.feedCooldownTicks),
